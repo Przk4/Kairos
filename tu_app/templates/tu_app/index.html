@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Integración con Canvas</title>
+    <style>
+        body { font-family: sans-serif; line-height: 1.6; margin: 2em; background-color: #f4f4f4; color: #333; }
+        .container { max-width: 800px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .btn { display: inline-block; background: #007bff; color: #fff; padding: 10px 20px; text-decoration: none; border-radius: 5px; }
+        .btn-logout { background: #dc3545; }
+        h1, h2 { color: #0056b3; }
+        ul { list-style-type: none; padding: 0; }
+        li { background: #e9ecef; margin-bottom: 5px; padding: 10px; border-radius: 4px; }
+        .error { color: #dc3545; background: #f8d7da; padding: 10px; border: 1px solid #f5c6cb; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Mi Aplicación Django + Canvas</h1>
+
+        {% if is_authenticated %}
+            <h2>¡Conectado a Canvas!</h2>
+            <p>Bienvenido. Aquí están tus cursos activos:</p>
+
+            {% if courses %}
+                <ul>
+                    {% for course in courses %}
+                        <li>{{ course.name }} (ID: {{ course.id }})</li>
+                    {% endfor %}
+                </ul>
+            {% elif error %}
+                <p class="error">{{ error }}</p>
+            {% else %}
+                <p>No se encontraron cursos activos o no tienes permiso para verlos.</p>
+            {% endif %}
+
+            <br>
+            <a href="{% url 'canvas_logout' %}" class="btn btn-logout">Desconectar de Canvas</a>
+
+        {% else %}
+            <h2>Conectar con Canvas</h2>
+            <p>Para ver tus cursos, necesitas autorizar esta aplicación en Canvas.</p>
+            
+            {% if error %}
+                <p class="error">{{ error }}</p>
+            {% endif %}
+
+            <a href="{% url 'canvas_login' %}" class="btn">Conectar con Canvas</a>
+        {% endif %}
+
+    </div>
+</body>
+</html>

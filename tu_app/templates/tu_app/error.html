@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Error de Autenticación</title>
+    <style>
+        body { font-family: sans-serif; line-height: 1.6; margin: 2em; background-color: #f4f4f4; color: #333; }
+        .container { max-width: 800px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1 { color: #dc3545; }
+        .error-box { background: #f8d7da; padding: 15px; border: 1px solid #f5c6cb; border-radius: 5px; }
+        code { background: #e9ecef; padding: 2px 4px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Ocurrió un Error</h1>
+        <div class="error-box">
+            <p><strong>Mensaje:</strong> {{ error }}</p>
+            {% if details %}
+                <p><strong>Detalles:</strong> <code>{{ details }}</code></p>
+            {% endif %}
+        </div>
+        <br>
+        <a href="{% url 'index' %}">Volver a la página principal</a>
+    </div>
+</body>
+</html>
