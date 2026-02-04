@@ -3,48 +3,55 @@
 from django.shortcuts import render, redirect
 from django.conf import settings
 from django.utils import timezone
+from django.contrib.auth.models import User
 from datetime import timedelta
 import requests
 import logging
+from .models import CanvasToken
+from .canvas_auth import get_valid_canvas_token, refresh_canvas_token, make_canvas_request
+
+logger = logging.getLogger(__name__)
+
 
 def index(request):
     """
     Página principal. Muestra el botón de login o la lista de cursos si ya está conectado.
+    Intenta refrescar automáticamente el token si es necesario.
     """
-    access_token = request.session.get('canvas_access_token')
+    access_token = None
     courses = None
     error_message = None
+    user_id = None
 
-    if access_token:
-        # Idea profesional: Comprobar si el token ha expirado antes de usarlo.
-        # (Esto requeriría guardar la fecha de expiración en la sesión).
+    if request.user.is_authenticated:
+        # Intentamos obtener un token válido (se refresca automáticamente si es necesario)
+        access_token = get_valid_canvas_token(request.user)
         
-        # Idea profesional: Comprobar si tenemos el scope necesario.
-        required_scope = 'url:GET|/api/v1/courses'
-        granted_scopes = request.session.get('canvas_scopes', '')
-        if required_scope not in granted_scopes:
-            error_message = "No se concedió el permiso para ver los cursos. Por favor, vuelve a iniciar sesión."
-            # Limpiamos la sesión para forzar un nuevo login con los scopes correctos.
-            request.session.flush()
-
-        headers = {'Authorization': f'Bearer {access_token}'}
-        api_url = f"{settings.CANVAS_BASE_URL}/api/v1/courses"
-        
-        try:
-            response = requests.get(api_url, headers=headers, params={'enrollment_state': 'active'})
-            response.raise_for_status()  # Lanza un error si la respuesta es 4xx o 5xx
-            courses = response.json()
-        except requests.exceptions.RequestException as e:
-            error_message = f"Error al obtener los cursos. El token puede haber expirado. Por favor, intenta conectar de nuevo."
-            # Limpiamos el token inválido de la sesión
-            request.session.flush() # Limpia toda la sesión si el token falla
+        if not access_token:
+            error_message = "Tu sesión de Canvas ha expirado. Por favor, vuelve a conectar."
+        else:
+            try:
+                headers = {'Authorization': f'Bearer {access_token}'}
+                api_url = f"{settings.CANVAS_BASE_URL}/api/v1/courses"
+                response = requests.get(api_url, headers=headers, params={'enrollment_state': 'active'})
+                response.raise_for_status()
+                courses = response.json()
+                
+                # Obtenemos el Canvas user ID de la BD
+                canvas_token = request.user.canvas_token
+                user_id = canvas_token.canvas_user_id
+                
+            except requests.exceptions.RequestException as e:
+                error_message = f"Error al obtener los cursos. Por favor, intenta conectar de nuevo."
+                logger.error(f"Error fetching courses for user {request.user.username}: {str(e)}")
     
     return render(request, 'tu_app/index.html', {
-        'is_authenticated': access_token is not None,
+        'is_authenticated': request.user.is_authenticated and access_token is not None,
         'courses': courses,
         'error_message': error_message,
-        'user_id': request.session.get('canvas_user_id')
+        'user_id': user_id
     })
+
 
 def canvas_login(request):
     """
@@ -55,22 +62,20 @@ def canvas_login(request):
         f"?client_id={settings.CANVAS_CLIENT_ID}"
         f"&response_type=code"
         f"&redirect_uri={settings.CANVAS_REDIRECT_URI}"
-        # Añadimos el scope para solicitar permiso para leer la lista de cursos.
-        # Esto es necesario para evitar el error "invalid_scope".
         f"&scope=url:GET|/api/v1/courses"
     )
     return redirect(auth_url)
 
+
 def canvas_callback(request):
     """
     Paso 2 del flujo: Canvas nos redirige aquí con un código.
-    Lo intercambiamos por un token de acceso.
+    Lo intercambiamos por un token de acceso y lo guardamos en BD.
     """
     auth_code = request.GET.get('code')
     if not auth_code:
         return render(request, 'tu_app/error.html', {'error': 'No se recibió el código de autorización.'})
 
-    # Preparamos la solicitud para obtener el token
     token_url = f"{settings.CANVAS_BASE_URL}/login/oauth2/token"
     payload = {
         'grant_type': 'authorization_code',
@@ -80,46 +85,65 @@ def canvas_callback(request):
         'code': auth_code,
     }
 
-    # Preparamos los encabezados, incluyendo el User-Agent requerido por Canvas
     headers = {
         'User-Agent': 'KairosProject/1.0 (pruzhk4)'
     }
 
-
     try:
-        # Hacemos la solicitud POST
         response = requests.post(token_url, data=payload, headers=headers)
         response.raise_for_status()
         
         token_data = response.json()
-
-        # Guardamos toda la información útil en la sesión
-        request.session['canvas_access_token'] = token_data['access_token']
-        request.session['canvas_refresh_token'] = token_data.get('refresh_token')
-        request.session['canvas_user_id'] = token_data['user']['id']
-        request.session['canvas_scopes'] = token_data.get('scope', '')
         
-        # Guardamos cuándo expira el token para poder refrescarlo en el futuro
-        expires_in = token_data.get('expires_in', 3600) # Segundos
-        request.session['canvas_token_expires_at'] = (timezone.now() + timedelta(seconds=expires_in)).isoformat()
+        # Obtenemos o creamos el usuario de Django
+        canvas_user_id = token_data['user']['id']
+        user, created = User.objects.get_or_create(
+            username=token_data['user']['login'],
+            defaults={
+                'email': token_data['user'].get('email', ''),
+                'first_name': token_data['user'].get('name', '').split()[0] if token_data['user'].get('name') else '',
+                'last_name': ' '.join(token_data['user'].get('name', '').split()[1:]) if token_data['user'].get('name') else '',
+            }
+        )
         
-        # Redirigimos a la página principal, donde ahora se mostrarán los cursos
+        # Calculamos la fecha de expiración
+        expires_in = token_data.get('expires_in', 3600)
+        expires_at = timezone.now() + timedelta(seconds=expires_in)
+        
+        # Guardamos o actualizamos el token en BD
+        canvas_token, _ = CanvasToken.objects.update_or_create(
+            user=user,
+            defaults={
+                'access_token': token_data['access_token'],
+                'refresh_token': token_data.get('refresh_token', ''),
+                'canvas_user_id': canvas_user_id,
+                'expires_at': expires_at,
+                'scopes': token_data.get('scope', ''),
+            }
+        )
+        
+        # Autenticamos el usuario en Django
+        request.session['_auth_user_id'] = user.id
+        request.session['_auth_user_backend'] = 'django.contrib.auth.backends.ModelBackend'
+        request.session['_auth_user_hash'] = user.get_session_auth_hash()
+        
+        logger.info(f"User {user.username} authenticated successfully with Canvas token")
+        
         return redirect('index')
 
     except requests.exceptions.RequestException as e:
-        # Loguear el error detallado para el desarrollador
-        logger = logging.getLogger(__name__)
-        response_details = e.response.text if e.response else 'No se recibió respuesta del servidor.'
-        logger.error(f"Error al solicitar el token de Canvas: {e}. Detalles: {response_details}")
+        response_details = e.response.text if e.response else 'No response from server'
+        logger.error(f"Error requesting Canvas token: {str(e)}. Details: {response_details}")
         
-        # Mostrar un mensaje genérico al usuario
         return render(request, 'tu_app/error.html', {
             'error': 'Ocurrió un error durante la autenticación con Canvas. Por favor, inténtalo de nuevo.'
         })
 
+
 def canvas_logout(request):
     """
-    Limpia el token de la sesión para "desconectar".
+    Limpia la sesión del usuario.
     """
-    request.session.flush() # flush() es más seguro, elimina toda la sesión.
+    from django.contrib.auth import logout
+    logout(request)
     return redirect('index')

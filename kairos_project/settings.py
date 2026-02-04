@@ -56,6 +56,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'tu_app.middleware.CanvasTokenRefreshMiddleware',  # Refrescador automático de tokens
 ]
 
 ROOT_URLCONF = 'kairos_project.urls'
