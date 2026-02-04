@@ -7,50 +7,75 @@ from django.contrib.auth.models import User
 from datetime import timedelta
 import requests
 import logging
-from .models import CanvasToken
-from .canvas_auth import get_valid_canvas_token, refresh_canvas_token, make_canvas_request
+from .models import CanvasToken, Course, Module
+from .canvas_auth import (
+    get_valid_canvas_token, 
+    refresh_canvas_token, 
+    make_canvas_request,
+    detect_user_role,
+    sync_courses_for_user,
+    sync_modules_for_course
+)
 
 logger = logging.getLogger(__name__)
 
 
 def index(request):
     """
-    Página principal. Muestra el botón de login o la lista de cursos si ya está conectado.
-    Intenta refrescar automáticamente el token si es necesario.
+    Página principal. Muestra el botón de login o el dashboard según el rol.
     """
-    access_token = None
-    courses = None
-    error_message = None
-    user_id = None
-
-    if request.user.is_authenticated:
-        # Intentamos obtener un token válido (se refresca automáticamente si es necesario)
+    if not request.user.is_authenticated:
+        return render(request, 'tu_app/index.html', {'is_authenticated': False})
+    
+    # Obtenemos el token del usuario
+    try:
+        canvas_token = request.user.canvas_token
         access_token = get_valid_canvas_token(request.user)
         
         if not access_token:
-            error_message = "Tu sesión de Canvas ha expirado. Por favor, vuelve a conectar."
+            return render(request, 'tu_app/error.html', {
+                'error': 'Tu sesión de Canvas ha expirado. Por favor, vuelve a conectar.'
+            })
+        
+        # Detectamos el rol si es desconocido
+        if canvas_token.role == 'unknown':
+            detect_user_role(request.user)
+            canvas_token.refresh_from_db()
+        
+        # Sincronizamos cursos desde Canvas
+        courses = sync_courses_for_user(request.user)
+        
+        # Para estudiantes, también sincronizamos módulos
+        if canvas_token.is_student():
+            # Sincronizamos módulos de cada curso
+            for course in courses:
+                sync_modules_for_course(request.user, course)
+            
+            # Obtenemos los módulos de la BD
+            modules = Module.objects.filter(course__user=request.user).select_related('course')
         else:
-            try:
-                headers = {'Authorization': f'Bearer {access_token}'}
-                api_url = f"{settings.CANVAS_BASE_URL}/api/v1/courses"
-                response = requests.get(api_url, headers=headers, params={'enrollment_state': 'active'})
-                response.raise_for_status()
-                courses = response.json()
-                
-                # Obtenemos el Canvas user ID de la BD
-                canvas_token = request.user.canvas_token
-                user_id = canvas_token.canvas_user_id
-                
-            except requests.exceptions.RequestException as e:
-                error_message = f"Error al obtener los cursos. Por favor, intenta conectar de nuevo."
-                logger.error(f"Error fetching courses for user {request.user.username}: {str(e)}")
-    
-    return render(request, 'tu_app/index.html', {
-        'is_authenticated': request.user.is_authenticated and access_token is not None,
-        'courses': courses,
-        'error_message': error_message,
-        'user_id': user_id
-    })
+            modules = []
+        
+        return render(request, 'tu_app/index.html', {
+            'is_authenticated': True,
+            'user_role': canvas_token.get_role_display(),
+            'is_teacher': canvas_token.is_teacher(),
+            'is_student': canvas_token.is_student(),
+            'courses': courses,
+            'modules': modules,
+            'user_id': canvas_token.canvas_user_id
+        })
+        
+    except CanvasToken.DoesNotExist:
+        logger.warning(f"User {request.user.username} has no Canvas token")
+        return render(request, 'tu_app/error.html', {
+            'error': 'No has vinculado tu cuenta de Canvas. Por favor, inicia sesión nuevamente.'
+        })
+    except Exception as e:
+        logger.error(f"Error in index view for user {request.user.username}: {str(e)}")
+        return render(request, 'tu_app/error.html', {
+            'error': f'Error: {str(e)}'
+        })
 
 
 def canvas_login(request):
@@ -97,8 +122,16 @@ def canvas_callback(request):
         
         # Obtenemos o creamos el usuario de Django
         canvas_user_id = token_data['user']['id']
+        
+        # Generamos un username único basado en los datos disponibles
+        login_name = (
+            token_data['user'].get('login') or 
+            token_data['user'].get('email', '').split('@')[0] or 
+            f"canvas_user_{canvas_user_id}"
+        )
+        
         user, created = User.objects.get_or_create(
-            username=token_data['user']['login'],
+            username=login_name,
             defaults={
                 'email': token_data['user'].get('email', ''),
                 'first_name': token_data['user'].get('name', '').split()[0] if token_data['user'].get('name') else '',
@@ -119,6 +152,7 @@ def canvas_callback(request):
                 'canvas_user_id': canvas_user_id,
                 'expires_at': expires_at,
                 'scopes': token_data.get('scope', ''),
+                'role': 'unknown',  # Se detectará más tarde
             }
         )
         
@@ -126,6 +160,9 @@ def canvas_callback(request):
         request.session['_auth_user_id'] = user.id
         request.session['_auth_user_backend'] = 'django.contrib.auth.backends.ModelBackend'
         request.session['_auth_user_hash'] = user.get_session_auth_hash()
+        
+        # Detectamos el rol automáticamente
+        detect_user_role(user)
         
         logger.info(f"User {user.username} authenticated successfully with Canvas token")
         
