@@ -7,6 +7,7 @@ from django.contrib.auth.models import User
 from datetime import timedelta
 import requests
 import logging
+import secrets
 from .models import CanvasToken, Course, Module
 from .canvas_auth import (
     get_valid_canvas_token, 
@@ -58,6 +59,7 @@ def index(request):
         
         return render(request, 'tu_app/index.html', {
             'is_authenticated': True,
+            'user': request.user,
             'user_role': canvas_token.get_role_display(),
             'is_teacher': canvas_token.is_teacher(),
             'is_student': canvas_token.is_student(),
@@ -81,12 +83,18 @@ def index(request):
 def canvas_login(request):
     """
     Paso 1 del flujo: Redirige al usuario a la página de autorización de Canvas.
+    Genera un state token para seguridad CSRF.
     """
+    # Generamos un state token aleatorio para seguridad
+    state = secrets.token_urlsafe(32)
+    request.session['oauth_state'] = state
+    
     auth_url = (
         f"{settings.CANVAS_BASE_URL}/login/oauth2/auth"
         f"?client_id={settings.CANVAS_CLIENT_ID}"
         f"&response_type=code"
         f"&redirect_uri={settings.CANVAS_REDIRECT_URI}"
+        f"&state={state}"
         f"&scope=url:GET|/api/v1/courses"
     )
     return redirect(auth_url)
@@ -95,8 +103,21 @@ def canvas_login(request):
 def canvas_callback(request):
     """
     Paso 2 del flujo: Canvas nos redirige aquí con un código.
-    Lo intercambiamos por un token de acceso y lo guardamos en BD.
+    Validamos el state, intercambiamos el código por un token y lo guardamos en BD.
     """
+    # Validamos el state para seguridad CSRF
+    state = request.GET.get('state')
+    session_state = request.session.get('oauth_state')
+    
+    if not state or state != session_state:
+        logger.warning(f"State mismatch or missing in OAuth callback")
+        return render(request, 'tu_app/error.html', {
+            'error': 'Sesión incorrecta o no presentada para OAuth. Por favor, intenta de nuevo.'
+        })
+    
+    # Limpiamos el state de la sesión
+    del request.session['oauth_state']
+    
     auth_code = request.GET.get('code')
     if not auth_code:
         return render(request, 'tu_app/error.html', {'error': 'No se recibió el código de autorización.'})
