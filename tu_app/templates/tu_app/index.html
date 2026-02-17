@@ -85,14 +85,14 @@
                                                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                                                     <h4 style="margin: 0;">{{ module.name }}</h4>
                                                     {% with analysis=module.analysis %}
-                                                        {% if analysis.status == 'completed' %}
-                                                            <span style="color: #28a745; font-size: 0.85em;">✅ Analizado</span>
-                                                        {% elif analysis.status == 'analyzing' %}
+                                                        {% if analysis.status == 'analyzing' %}
                                                             <span style="color: #ffc107; font-size: 0.85em;">⏳ Analizando...</span>
-                                                        {% elif analysis.status == 'failed' %}
-                                                            <span style="color: #dc3545; font-size: 0.85em;">❌ Error</span>
                                                         {% else %}
-                                                            <button class="analyze-btn" data-module-id="{{ module.id }}" style="background: #6c757d; color: white; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em;">🔍 Analizar</button>
+                                                            {% if analysis.status == 'completed' and analysis.document_count > 0 %}
+                                                                <button class="analyze-btn" data-module-id="{{ module.id }}" style="background: #28a745; color: white; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em;">🔄 Re-analizar</button>
+                                                            {% else %}
+                                                                <button class="analyze-btn" data-module-id="{{ module.id }}" style="background: #6c757d; color: white; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em;">🔍 Analizar</button>
+                                                            {% endif %}
                                                         {% endif %}
                                                     {% endwith %}
                                                 </div>
@@ -165,111 +165,88 @@
     {% csrf_token %}
 
     <script>
-    // Sincronizar estado de botones al cargar la página
+    console.log('[INIT] Script loaded');
+    
     document.addEventListener('DOMContentLoaded', function() {
-        const analyzeButtons = document.querySelectorAll('.analyze-btn');
+        console.log('[DOMContentLoaded] Page loaded');
         
-        analyzeButtons.forEach(btn => {
-            const moduleId = btn.dataset.moduleId;
-            if (moduleId) {
-                // Verificar estado real del módulo
-                syncModuleAnalysisStatus(moduleId, btn);
+        // Usar event delegation en lugar de buscar botones directamente
+        // Esto funciona incluso si los botones se agregan dinámicamente
+        document.addEventListener('click', function(e) {
+            const button = e.target.closest('.analyze-btn');
+            if (!button) return; // Si no es un botón, ignorar
+            
+            e.preventDefault();
+            const moduleId = button.dataset.moduleId;
+            
+            console.log(`[CLICK] Clicked analyze button for module: ${moduleId}`);
+            
+            if (!moduleId) {
+                console.error('[CLICK] No moduleId found!');
+                alert('Error: module ID not found');
+                return;
             }
+            
+            analyzeModule(button, moduleId);
         });
+        
+        console.log('[DOMContentLoaded] Event delegation registered');
     });
 
-    // Sincronizar estado real del módulo con el backend
-    function syncModuleAnalysisStatus(moduleId, button) {
-        fetch(`/api/module/${moduleId}/analysis-status/`, {
-            method: 'GET',
+    // Ejecutar análisis
+    function analyzeModule(button, moduleId) {
+        console.log(`[ANALYZE] Starting analysis for module ${moduleId}`);
+        
+        button.disabled = true;
+        button.textContent = '⏳ Analizando...';
+        button.style.background = '#ffc107';
+        
+        const csrfToken = getCSRFToken();
+        console.log(`[ANALYZE] CSRF token: ${csrfToken ? 'Found' : 'NOT FOUND'}`);
+        
+        fetch(`/api/analyze-module/${moduleId}/`, {
+            method: 'POST',
             headers: {
+                'X-CSRFToken': csrfToken,
                 'Content-Type': 'application/json'
             }
         })
-        .then(response => response.json())
+        .then(response => {
+            console.log(`[ANALYZE] Response status: ${response.status}`);
+            if (!response.ok) {
+                console.error(`[ANALYZE] HTTP Error: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(data => {
-            console.log(`Module ${moduleId} analysis status:`, data);
+            console.log(`[ANALYZE] Response data:`, data);
+            button.disabled = false;
             
-            // Resetear estado del botón basado en datos reales
-            if (data.is_analyzed && data.document_count > 0) {
-                // Módulo ya analizado
-                button.textContent = '✅ Analizado';
+            if (data.status === 'completed') {
+                button.textContent = '🔄 Re-analizar';
                 button.style.background = '#28a745';
-                button.disabled = true;
-                button.dataset.analyzed = 'true';
+                console.log('[ANALYZE] ✅ Analysis completed');
+                alert('✅ ' + data.message);
             } else {
-                // Módulo no analizado o datos perdidos
-                button.textContent = '🔍 Analizar';
+                button.textContent = '🔍 Reintentar análisis';
                 button.style.background = '#6c757d';
-                button.disabled = false;
-                button.dataset.analyzed = 'false';
+                console.log('[ANALYZE] ❌ Analysis failed:', data.error);
+                alert('Error: ' + (data.error || 'Unknown error'));
             }
         })
         .catch(error => {
-            console.warn(`Could not sync status for module ${moduleId}:`, error);
-            // Si hay error, dejar el botón disponible
-            button.style.background = '#6c757d';
+            console.error(`[ANALYZE] Fetch error:`, error);
             button.disabled = false;
+            button.textContent = '🔍 Reintentar análisis';
+            button.style.background = '#6c757d';
+            alert('Connection error: ' + error.message);
         });
     }
 
-    // Handle module analysis
-    document.querySelectorAll('.analyze-btn').forEach(btn => {
-        btn.addEventListener('click', function(e) {
-            e.preventDefault();
-            const moduleId = this.dataset.moduleId;
-            const button = this;
-            
-            button.disabled = true;
-            button.textContent = '⏳ Analizando...';
-            button.style.background = '#ffc107';
-            
-            fetch(`/api/analyze-module/${moduleId}/`, {
-                method: 'POST',
-                headers: {
-                    'X-CSRFToken': getCSRFToken(),
-                    'Content-Type': 'application/json'
-                }
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'completed') {
-                    button.textContent = '✅ Analizado';
-                    button.style.background = '#28a745';
-                    button.disabled = true;
-                    button.dataset.analyzed = 'true';
-                    alert(`✅ ${data.message}`);
-                } else {
-                    button.textContent = '❌ Error - Reintentar';
-                    button.style.background = '#dc3545';
-                    button.disabled = false;
-                    button.dataset.analyzed = 'false';
-                    alert(`Error: ${data.error || 'Error desconocido'}`);
-                }
-            })
-            .catch(error => {
-                button.textContent = '🔍 Reintentar';
-                button.style.background = '#6c757d';
-                button.disabled = false;
-                button.dataset.analyzed = 'false';
-                alert(`Error: ${error.message}`);
-            });
-        });
-    });
-
-    // Helper function to get CSRF token from Django
+    // Get CSRF token
     function getCSRFToken() {
-        // Extraer token del input csrf_token
-        let token = document.querySelector('[name=csrfmiddlewaretoken]');
-        if (token) {
-            return token.value;
-        }
-        // Fallback: buscar en la meta tag
-        token = document.querySelector('meta[name="csrf-token"]');
-        if (token) {
-            return token.getAttribute('content');
-        }
-        return '';
+        const token = document.querySelector('[name=csrfmiddlewaretoken]');
+        return token ? token.value : '';
     }
     </script>
 </body>

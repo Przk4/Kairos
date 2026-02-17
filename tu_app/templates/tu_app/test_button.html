@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test - Boton Analizar</title>
+    <style>
+        body { font-family: Arial; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; }
+        h1 { color: #333; }
+        .section { margin: 20px 0; padding: 15px; background: #f9f9f9; border-left: 4px solid #007bff; }
+        button { padding: 10px 20px; margin: 5px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .analyze-btn { background: #6c757d; color: white; }
+        .analyze-btn:hover { background: #5a6268; }
+        .status { margin: 10px 0; padding: 10px; border-radius: 4px; }
+        .status.ok { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .status.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .status.loading { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+        code { background: #ddd; padding: 2px 5px; border-radius: 3px; font-family: monospace; }
+        #console { background: black; color: #0f0; padding: 10px; border-radius: 4px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px; }
+        .console-line { margin: 2px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Test - Boton Analizar</h1>
+        
+        <div class="section">
+            <h2>Paso 1: Verificar que el Servidor Responde</h2>
+            <p>Este test verifica que el servidor Django está funcionando correctamente.</p>
+            <button onclick="testServer()">Testear Servidor</button>
+            <div id="server-status" class="status" style="display:none;"></div>
+        </div>
+        
+        <div class="section">
+            <h2>Paso 2: Test de Botón Simulado</h2>
+            <p>Este botón simula un análisis (sin datos reales) para verificar que los clics funcionan.</p>
+            <button class="analyze-btn" onclick="testAnalyzeButton(this)">🔍 Test Análisis</button>
+            <div id="button-status" class="status" style="display:none;"></div>
+        </div>
+        
+        <div class="section">
+            <h2>Paso 3: Verificar Estado de Módulos</h2>
+            <p>Verifica qué módulos tienen análisis completado.</p>
+            <button onclick="checkModuleStatus()">Verificar Estado de Módulos</button>
+            <div id="modules-status" class="status" style="display:none;"></div>
+        </div>
+        
+        <div class="section">
+            <h2>Console Output</h2>
+            <p>Aquí aparecen los mensajes de debug:</p>
+            <div id="console"></div>
+        </div>
+    </div>
+
+    <script>
+    function log(message, type = 'info') {
+        const console = document.getElementById('console');
+        const line = document.createElement('div');
+        line.className = 'console-line';
+        const timestamp = new Date().toLocaleTimeString();
+        
+        let prefix = '';
+        if (type === 'success') prefix = '[OK]    ';
+        else if (type === 'error') prefix = '[ERROR] ';
+        else if (type === 'info') prefix = '[INFO]  ';
+        else if (type === 'warn') prefix = '[WARN]  ';
+        
+        line.textContent = `${prefix}${message}`;
+        console.appendChild(line);
+        console.scrollTop = console.scrollHeight;
+    }
+
+    function showStatus(elementId, message, status) {
+        const elem = document.getElementById(elementId);
+        elem.className = `status ${status}`;
+        elem.textContent = message;
+        elem.style.display = 'block';
+    }
+
+    function testServer() {
+        log('Testing server connection...', 'info');
+        
+        fetch('/api/test-button-click/')
+            .then(response => {
+                log(`Server responded with status ${response.status}`, 'info');
+                return response.json();
+            })
+            .then(data => {
+                log('Server is working!', 'success');
+                showStatus('server-status', '✓ Servidor responde correctamente', 'ok');
+            })
+            .catch(error => {
+                log(`Server error: ${error.message}`, 'error');
+                showStatus('server-status', `✗ Error: ${error.message}`, 'error');
+            });
+    }
+
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+
+    function testAnalyzeButton(button) {
+        log('Test button clicked!', 'info');
+        
+        button.disabled = true;
+        button.textContent = '⏳ Procesando...';
+        button.style.background = '#ffc107';
+        
+        showStatus('button-status', 'Enviando request...', 'loading');
+        
+        // Obtener CSRF token
+        const csrftoken = getCookie('csrftoken');
+        log(`CSRF token: ${csrftoken ? 'found' : 'NOT found'}`, 'info');
+        
+        fetch('/api/test-button-click/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrftoken || ''
+            }
+        })
+        .then(response => {
+            log(`Response status: ${response.status}`, 'info');
+            return response.json();
+        })
+        .then(data => {
+            log('Analysis response: ' + JSON.stringify(data), 'success');
+            
+            if (data.status === 'completed') {
+                button.textContent = '✅ Test Completado';
+                button.style.background = '#28a745';
+                button.disabled = false;
+                showStatus('button-status', '✓ Test análisis funcionó correctamente!', 'ok');
+            } else {
+                button.textContent = '❌ Error';
+                button.style.background = '#dc3545';
+                button.disabled = false;
+                showStatus('button-status', '✗ Test análisis falló', 'error');
+            }
+        })
+        .catch(error => {
+            log(`Error during test: ${error.message}`, 'error');
+            button.textContent = '🔍 Reintentar';
+            button.style.background = '#6c757d';
+            button.disabled = false;
+            showStatus('button-status', `✗ Error: ${error.message}`, 'error');
+        });
+    }
+
+    function checkModuleStatus() {
+        log('Checking module status...', 'info');
+        
+        // Check modules 1, 2, 3
+        const moduleIds = [1, 2, 3];
+        let results = [];
+        let completed = 0;
+        
+        moduleIds.forEach(moduleId => {
+            fetch(`/api/module/${moduleId}/analysis-status/`)
+                .then(response => response.json())
+                .then(data => {
+                    completed++;
+                    log(`Module ${moduleId}: ${data.document_count} documents`, 'info');
+                    results.push({
+                        id: moduleId,
+                        analyzed: data.is_analyzed,
+                        docs: data.document_count
+                    });
+                    
+                    if (completed === moduleIds.length) {
+                        const html = results.map(r => 
+                            `<strong>Módulo ${r.id}:</strong> ${r.docs} documentos (${r.analyzed ? 'Analizado' : 'No analizado'})`
+                        ).join('<br>');
+                        showStatus('modules-status', html, 'ok');
+                    }
+                })
+                .catch(error => {
+                    log(`Module ${moduleId} error: ${error.message}`, 'error');
+                });
+        });
+    }
+
+    // Auto log on page load
+    window.addEventListener('load', () => {
+        log('Test page loaded successfully', 'success');
+        log('Ready to test!', 'info');
+    });
+    </script>
+</body>
+</html>

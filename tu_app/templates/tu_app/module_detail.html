@@ -124,6 +124,53 @@
     </div>
 
     <script>
+    // Sincronizar estado al cargar la página
+    document.addEventListener('DOMContentLoaded', function() {
+        syncAnalysisStatus();
+    });
+
+    function syncAnalysisStatus() {
+        const moduleId = {{ module.id }};
+        
+        fetch(`/api/module/${moduleId}/analysis-status/`, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            console.log('Analysis status:', data);
+            const btn = document.getElementById('analyzeBtn');
+            
+            if (data.is_analyzed && data.document_count > 0) {
+                // Ya analizado - permitir re-análisis
+                if (btn) {
+                    btn.textContent = '🔄 Re-analizar';
+                    btn.disabled = false;  // PERMITIR RE-ANÁLISIS
+                    btn.style.background = '#28a745';
+                }
+            } else {
+                // No analizado
+                if (btn) {
+                    btn.textContent = '🔍 Analizar módulo';
+                    btn.disabled = false;
+                    btn.style.background = '#6c757d';
+                }
+            }
+        })
+        .catch(error => {
+            console.warn('Error syncing status:', error);
+            // IMPORTANTE: Permiter análisis incluso si hay error
+            const btn = document.getElementById('analyzeBtn');
+            if (btn) {
+                btn.textContent = '🔍 Analizar módulo';
+                btn.disabled = false;  // SIEMPRE HABILITADO
+                btn.style.background = '#6c757d';
+            }
+        });
+    }
+
     function analyzeModule() {
         const moduleId = {{ module.id }};
         const btn = document.getElementById('analyzeBtn');
@@ -131,6 +178,7 @@
         if (btn) {
             btn.disabled = true;
             btn.textContent = '⏳ Analizando...';
+            btn.style.background = '#ffc107';
         }
 
         fetch(`/api/analyze-module/${moduleId}/`, {
@@ -144,21 +192,15 @@
         .then(data => {
             if (data.status === 'completed') {
                 alert(`✅ ${data.message}`);
-                location.reload();
+                syncAnalysisStatus(); // Actualizar estado sin recargar
             } else {
                 alert(`❌ Error: ${data.error || 'Error desconocido'}`);
-                if (btn) {
-                    btn.disabled = false;
-                    btn.textContent = '🔍 Analizar módulo';
-                }
+                syncAnalysisStatus(); // Sincronizar estado real
             }
         })
         .catch(error => {
             alert(`❌ Error: ${error.message}`);
-            if (btn) {
-                btn.disabled = false;
-                btn.textContent = '🔍 Analizar módulo';
-            }
+            syncAnalysisStatus(); // Sincronizar estado real
         });
     }
 

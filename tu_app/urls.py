@@ -21,5 +21,7 @@ urlpatterns = [
     path('api/debug/stats/', views.debug_stats, name='debug_stats'),
     path('api/debug/documents/', views.debug_documents, name='debug_documents'),
     path('api/module/<int:module_id>/analysis-status/', views.check_module_analysis_status, name='check_analysis_status'),
+    path('api/test-button-click/', views.test_button_click, name='test_button_click'),
+    path('test-button/', views.test_button_page, name='test_button'),
     path('debug/dashboard/', views.debug_dashboard, name='debug_dashboard'),
 ]

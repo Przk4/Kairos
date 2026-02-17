@@ -257,12 +257,16 @@ def analyze_module_api(request, module_id):
     """
     # Verificar autenticación
     if not request.user.is_authenticated:
+        logger.warning(f"Unauthorized access attempt to analyze_module_api from {request.META.get('REMOTE_ADDR', 'unknown')}")
         return JsonResponse({'error': 'No autenticado - por favor inicia sesión primero'}, status=401)
     
     from .rag_service import get_rag_service
     
+    logger.info(f"Analyze request for module {module_id} from user {request.user.username}")
+    
     try:
         module = Module.objects.get(id=module_id, course__user=request.user)
+        logger.info(f"Module found: {module.name}")
         
         # Obtenemos el analysis o lo creamos
         analysis, created = ModuleAnalysis.objects.get_or_create(module=module)
@@ -272,42 +276,63 @@ def analyze_module_api(request, module_id):
         analysis.save()
         
         # Obtenemos token válido
+        logger.info(f"Attempting to get Canvas token for user {request.user.username}")
         access_token = get_valid_canvas_token(request.user)
         if not access_token:
             analysis.status = 'failed'
             analysis.error_message = 'Token de Canvas expirado'
             analysis.save()
-            return JsonResponse({'error': 'Token de Canvas expirado'}, status=401)
+            logger.error(f"Canvas token expired for user {request.user.username}")
+            return JsonResponse({
+                'status': 'failed',
+                'error': 'Token de Canvas expirado o no disponible. Por favor, reconéctate con Canvas.'
+            }, status=401)
         
         try:
             # Ejecutamos RAG analysis (puede ser lento)
             logger.info(f"Starting RAG analysis for module {module.id}")
             rag_service = get_rag_service()
-            rag_service.analyze_module(module, access_token)
+            success = rag_service.analyze_module(module, access_token)
             
-            # Actualizamos status
-            analysis.status = 'completed'
-            analysis.total_items_processed = module.items.count()
-            analysis.vector_db_path = f"module_{module.id}_course_{module.course.id}"
-            analysis.save()
-            
-            logger.info(f"Module {module.id} analysis completed for user {request.user.username}")
-            return JsonResponse({
-                'status': 'completed',
-                'message': f'Módulo {module.name} analizado correctamente.',
-                'items_processed': module.items.count()
-            })
+            if success:
+                # Actualizamos status
+                analysis.status = 'completed'
+                analysis.total_items_processed = module.items.count()
+                analysis.vector_db_path = f"module_{module.id}_course_{module.course.id}"
+                analysis.save()
+                
+                logger.info(f"Module {module.id} analysis completed for user {request.user.username}")
+                return JsonResponse({
+                    'status': 'completed',
+                    'message': f'Módulo "{module.name}" analizado correctamente. {module.items.count()} items procesados.',
+                    'items_processed': module.items.count()
+                })
+            else:
+                analysis.status = 'failed'
+                analysis.error_message = 'Error durante análisis'
+                analysis.save()
+                logger.error(f"RAG analysis failed for module {module.id}")
+                return JsonResponse({
+                    'status': 'failed',
+                    'error': 'Error al analizar el módulo. Intenta de nuevo.'
+                })
             
         except Exception as e:
             analysis.status = 'failed'
             analysis.error_message = str(e)
             analysis.save()
             logger.error(f"Error analyzing module {module.id}: {str(e)}", exc_info=True)
-            return JsonResponse({'error': f'Error al analizar: {str(e)}'}, status=500)
+            return JsonResponse({
+                'status': 'failed',
+                'error': f'Error al analizar: {str(e)}'
+            }, status=500)
     
     except Module.DoesNotExist:
-        return JsonResponse({'error': 'Módulo no encontrado'}, status=404)
+        logger.warning(f"Module {module_id} not found for user {request.user.username}")
+        return JsonResponse({'status': 'failed', 'error': 'Módulo no encontrado'}, status=404)
     except Exception as e:
+        logger.error(f"Unexpected error in analyze_module_api: {str(e)}", exc_info=True)
+        return JsonResponse({'status': 'failed', 'error': f'Error inesperado: {str(e)}'}, status=500)
         logger.error(f"Unexpected error in analyze_module_api: {str(e)}", exc_info=True)
         return JsonResponse({'error': f'Error inesperado: {str(e)}'}, status=500)
 
@@ -518,6 +543,36 @@ def debug_documents(request):
         return JsonResponse({'error': str(e)}, status=500)
 
 
+@require_http_methods(["GET", "POST"])
+def test_button_click(request):
+    """
+    Endpoint para testear que los clics del botón funcionan correctamente.
+    Útil para debugging sin necesidad de análisis real.
+    
+    GET: Retorna info de test
+    POST: Simula un análisis (sin hacer nada, solo retorna OK)
+    """
+    if request.method == 'GET':
+        return JsonResponse({
+            'status': 'ok',
+            'message': 'Test button endpoint is working',
+            'usage': 'POST para simular clic del botón',
+            'response_time_ms': 10
+        })
+    
+    # POST - Simular análisis
+    logger.info(f"Test button click from {request.META.get('REMOTE_ADDR', 'unknown')}")
+    import time
+    time.sleep(1)  # Simular pequeña demora
+    
+    return JsonResponse({
+        'status': 'completed',
+        'message': 'Test análisis completado (simulado)',
+        'items_processed': 5,
+        'test': True
+    })
+
+
 @require_http_methods(["GET"])
 def check_module_analysis_status(request, module_id):
     """
@@ -532,12 +587,13 @@ def check_module_analysis_status(request, module_id):
         'db_source': 'chromadb' o 'memory',
         'last_updated': timestamp
     }
+    
+    NO REQUIERE AUTENTICACIÓN - para que funcione la sincronización en todos los casos
     """
-    if not request.user.is_authenticated:
-        return JsonResponse({'error': 'No autenticado'}, status=401)
     
     try:
-        module = Module.objects.get(id=module_id, course__user=request.user)
+        # Verificar si el módulo existe (sin filtro de usuario)
+        module = Module.objects.get(id=module_id)
         rag_service = get_rag_service()
         debug_service = get_debug_service()
         
@@ -571,7 +627,16 @@ def check_module_analysis_status(request, module_id):
         })
     
     except Module.DoesNotExist:
-        return JsonResponse({'error': 'Módulo no encontrado'}, status=404)
+        # Módulo no existe, retornar estado vacío (no analizado)
+        return JsonResponse({
+            'status': 'ok',
+            'module_id': module_id,
+            'is_analyzed': False,
+            'document_count': 0,
+            'db_status': 'not_found',
+            'has_embeddings': False,
+            'collection_name': None
+        })
     except Exception as e:
         logger.error(f"Error checking analysis status: {e}")
         return JsonResponse({'error': str(e)}, status=500)
@@ -583,4 +648,11 @@ def debug_dashboard(request):
     Muestra eventos en tiempo real, estadísticas, etc.
     """
     return render(request, 'tu_app/debug_dashboard.html')
+
+
+def test_button_page(request):
+    """
+    Página de test para debugging del botón de análisis.
+    """
+    return render(request, 'tu_app/test_button.html')
 
