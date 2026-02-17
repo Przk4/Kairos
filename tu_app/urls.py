@@ -8,4 +8,18 @@ urlpatterns = [
     # ¡Asegúrate de que esta ruta coincida con la nueva URI!
     path('callback/', views.canvas_callback, name='canvas_callback'), 
     path('logout/', views.canvas_logout, name='canvas_logout'),
+    
+    # Rutas para módulos y chat
+    path('module/<int:module_id>/', views.module_detail, name='module_detail'),
+    path('api/analyze-module/<int:module_id>/', views.analyze_module_api, name='analyze_module_api'),
+    path('course/<int:course_id>/chat/', views.chat_view, name='chat'),
+    path('api/chat/', views.chat_api, name='chat_api'),
+    
+    # Endpoint de diagnóstico
+    path('api/test/', views.test_api, name='test_api'),
+    path('api/debug/events/', views.debug_events, name='debug_events'),
+    path('api/debug/stats/', views.debug_stats, name='debug_stats'),
+    path('api/debug/documents/', views.debug_documents, name='debug_documents'),
+    path('api/module/<int:module_id>/analysis-status/', views.check_module_analysis_status, name='check_analysis_status'),
+    path('debug/dashboard/', views.debug_dashboard, name='debug_dashboard'),
 ]

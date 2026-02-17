@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ module.name }} | Kairos</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f5f7fa; color: #333; line-height: 1.6; }
+        
+        .container { max-width: 900px; margin: auto; padding: 20px; }
+        
+        .header { background: #007bff; color: white; padding: 25px; border-radius: 8px; margin-bottom: 30px; }
+        .header h1 { margin: 0 0 10px 0; font-size: 2em; }
+        .header p { opacity: 0.9; margin: 0; }
+        
+        .back-btn { display: inline-block; background: rgba(255,255,255,0.2); color: white; padding: 8px 15px; border-radius: 5px; text-decoration: none; margin-bottom: 20px; }
+        .back-btn:hover { background: rgba(255,255,255,0.3); }
+        
+        .status-card { background: white; border: 1px solid #dee2e6; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .status-card h2 { color: #007bff; margin-bottom: 15px; font-size: 1.3em; }
+        
+        .status-badge { display: inline-block; padding: 8px 15px; border-radius: 20px; font-weight: bold; margin-bottom: 15px; }
+        .status-badge.pending { background: #e2e3e5; color: #383d41; }
+        .status-badge.analyzing { background: #fff3cd; color: #856404; }
+        .status-badge.completed { background: #d4edda; color: #155724; }
+        .status-badge.failed { background: #f8d7da; color: #721c24; }
+        
+        .analyze-btn { background: #28a745; color: white; padding: 12px 25px; border: none; border-radius: 5px; cursor: pointer; font-size: 1em; font-weight: bold; }
+        .analyze-btn:hover { opacity: 0.9; }
+        .analyze-btn:disabled { opacity: 0.5; cursor: not-allowed; background: #6c757d; }
+        
+        .items-list { background: white; border: 1px solid #dee2e6; border-radius: 8px; padding: 20px; }
+        .items-list h3 { color: #0056b3; margin-bottom: 15px; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
+        
+        .item { background: #f8f9fa; padding: 15px; margin-bottom: 10px; border-radius: 5px; border-left: 4px solid #007bff; }
+        .item h4 { color: #007bff; margin-bottom: 5px; }
+        .item-type { display: inline-block; background: #e7f3ff; color: #0056b3; padding: 3px 8px; border-radius: 3px; font-size: 0.85em; margin-right: 10px; }
+        .item-status { display: inline-block; padding: 3px 8px; border-radius: 3px; font-size: 0.85em; }
+        .item-status.locked { background: #f8d7da; color: #721c24; }
+        
+        .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-top: 15px; }
+        .stat-box { background: #f8f9fa; padding: 15px; border-radius: 5px; text-align: center; }
+        .stat-number { font-size: 2em; font-weight: bold; color: #007bff; }
+        .stat-label { color: #6c757d; font-size: 0.9em; margin-top: 5px; }
+        
+        .error-message { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="javascript:history.back()" class="back-btn">← Volver</a>
+        
+        <div class="header">
+            <h1>{{ module.name }}</h1>
+            <p>📍 Curso: {{ module.course.name }}</p>
+        </div>
+
+        <!-- Status y análisis -->
+        <div class="status-card">
+            <h2>🔍 Estado del Análisis RAG</h2>
+            
+            {% with status=analysis.status %}
+                {% if status == 'completed' %}
+                    <span class="status-badge completed">✅ Analizado</span>
+                    <p>Este módulo ha sido analizado y está listo para hacer preguntas.</p>
+                    <div class="stats">
+                        <div class="stat-box">
+                            <div class="stat-number">{{ analysis.total_items_processed }}</div>
+                            <div class="stat-label">Ítems procesados</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-number">{{ analysis.embedding_model|truncatewords:1 }}</div>
+                            <div class="stat-label">Modelo de embeddings</div>
+                        </div>
+                    </div>
+                {% elif status == 'analyzing' %}
+                    <span class="status-badge analyzing">⏳ Analizando...</span>
+                    <p>El sistema está analizando el contenido del módulo. Por favor, espera.</p>
+                {% elif status == 'failed' %}
+                    <span class="status-badge failed">❌ Error</span>
+                    <p>Hubo un error en el análisis. Por favor, intenta de nuevo.</p>
+                    {% if analysis.error_message %}
+                        <div class="error-message">
+                            <strong>Error:</strong> {{ analysis.error_message }}
+                        </div>
+                    {% endif %}
+                    <button class="analyze-btn" onclick="analyzeModule()">🔄 Reintentar análisis</button>
+                {% else %}
+                    <span class="status-badge pending">⚫ Sin analizar</span>
+                    <p>Este módulo aún no ha sido analizado. Haz clic en el botón para comenzar.</p>
+                    <button class="analyze-btn" id="analyzeBtn" onclick="analyzeModule()">🔍 Analizar módulo</button>
+                {% endif %}
+            {% endwith %}
+        </div>
+
+        <!-- Lista de ítems -->
+        <div class="items-list">
+            <h3>📚 Contenido del Módulo ({{ items.count }} ítems)</h3>
+            
+            {% if items %}
+                {% for item in items %}
+                    <div class="item">
+                        <h4>{{ item.title }}</h4>
+                        <div>
+                            <span class="item-type">{{ item.get_item_type_display }}</span>
+                            {% if item.is_locked %}
+                                <span class="item-status locked">🔒 Bloqueado</span>
+                            {% else %}
+                                <span class="item-status" style="background: #d4edda; color: #155724;">✓ Disponible</span>
+                            {% endif %}
+                        </div>
+                        {% if item.completion_requirement %}
+                            <p style="margin-top: 8px; font-size: 0.9em; color: #6c757d;">
+                                Requisito: {{ item.completion_requirement }}
+                            </p>
+                        {% endif %}
+                    </div>
+                {% endfor %}
+            {% else %}
+                <p style="color: #6c757d; text-align: center; padding: 20px;">No hay ítems en este módulo.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+    function analyzeModule() {
+        const moduleId = {{ module.id }};
+        const btn = document.getElementById('analyzeBtn');
+        
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = '⏳ Analizando...';
+        }
+
+        fetch(`/api/analyze-module/${moduleId}/`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': getCookie('csrftoken'),
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'completed') {
+                alert(`✅ ${data.message}`);
+                location.reload();
+            } else {
+                alert(`❌ Error: ${data.error || 'Error desconocido'}`);
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '🔍 Analizar módulo';
+                }
+            }
+        })
+        .catch(error => {
+            alert(`❌ Error: ${error.message}`);
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = '🔍 Analizar módulo';
+            }
+        });
+    }
+
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+    </script>
+</body>
+</html>

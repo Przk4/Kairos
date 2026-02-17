@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import CanvasToken, Course, Module, ModuleItem
+from .models import CanvasToken, Course, Module, ModuleItem, ModuleAnalysis, ChatMessage
 
 # Register your models here.
 
@@ -33,3 +33,20 @@ class ModuleItemAdmin(admin.ModelAdmin):
     list_filter = ('item_type', 'is_locked', 'module__course')
     search_fields = ('title', 'canvas_item_id')
     readonly_fields = ('canvas_item_id', 'created_at')
+
+
+@admin.register(ModuleAnalysis)
+class ModuleAnalysisAdmin(admin.ModelAdmin):
+    list_display = ('module', 'status', 'total_items_processed', 'updated_at')
+    list_filter = ('status', 'created_at')
+    search_fields = ('module__name', 'vector_db_path')
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(ChatMessage)
+class ChatMessageAdmin(admin.ModelAdmin):
+    list_display = ('user', 'course', 'role', 'model_used', 'tokens_used', 'created_at')
+    list_filter = ('role', 'model_used', 'created_at')
+    search_fields = ('user__username', 'course__name', 'content')
+    readonly_fields = ('created_at', 'tokens_used', 'processing_time')
+

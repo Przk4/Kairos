@@ -132,3 +132,63 @@ class ModuleItem(models.Model):
     
     def __str__(self):
         return f"{self.title} ({self.get_item_type_display()})"
+
+class ModuleAnalysis(models.Model):
+    """
+    Tracking de análisis de módulos con Piragi + embeddings.
+    Almacena metadatos sobre qué módulos han sido procesados.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pendiente'),
+        ('analyzing', 'Analizando'),
+        ('completed', 'Completado'),
+        ('failed', 'Error'),
+    ]
+    
+    module = models.OneToOneField(Module, on_delete=models.CASCADE, related_name='analysis')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    vector_db_path = models.CharField(max_length=500, blank=True)  # Ruta o ID en ChromaDB
+    total_items_processed = models.IntegerField(default=0)
+    embedding_model = models.CharField(max_length=100, default='sentence-transformers/all-MiniLM-L6-v2')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    error_message = models.TextField(blank=True)
+    
+    def __str__(self):
+        return f"Analysis: {self.module.name} - {self.status}"
+    
+    class Meta:
+        verbose_name = "Module Analysis"
+        verbose_name_plural = "Module Analyses"
+
+
+class ChatMessage(models.Model):
+    """
+    Modelo para almacenar conversaciones entre estudiantes e IA.
+    """
+    ROLE_CHOICES = [
+        ('student', 'Estudiante'),
+        ('ai', 'IA'),
+    ]
+    
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='chat_messages')
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='chat_messages')
+    module = models.ForeignKey(Module, on_delete=models.CASCADE, null=True, blank=True, related_name='chat_messages')
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES)
+    content = models.TextField()
+    # Tracking para debugging
+    tokens_used = models.IntegerField(null=True, blank=True)
+    processing_time = models.FloatField(null=True, blank=True)  # En segundos
+    model_used = models.CharField(max_length=50, default='deepseek')
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        verbose_name = "Chat Message"
+        verbose_name_plural = "Chat Messages"
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'course', '-created_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.user.username} - {self.role}: {self.content[:50]}"
