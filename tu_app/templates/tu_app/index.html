@@ -168,17 +168,26 @@
     console.log('[INIT] Script loaded');
     
     document.addEventListener('DOMContentLoaded', function() {
-        console.log('[DOMContentLoaded] Page loaded');
+        console.log('[DOMContentLoaded] Page loaded, syncing module states...');
         
-        // Usar event delegation en lugar de buscar botones directamente
-        // Esto funciona incluso si los botones se agregan dinámicamente
+        // Sincronizar estado real de TODOS los botones al cargar
+        const buttons = document.querySelectorAll('.analyze-btn');
+        console.log(`[DOMContentLoaded] Found ${buttons.length} analyze buttons`);
+        
+        buttons.forEach(btn => {
+            const moduleId = btn.dataset.moduleId;
+            if (moduleId) {
+                syncModuleState(moduleId, btn);
+            }
+        });
+        
+        // Usar event delegation para clicks
         document.addEventListener('click', function(e) {
             const button = e.target.closest('.analyze-btn');
-            if (!button) return; // Si no es un botón, ignorar
+            if (!button) return;
             
             e.preventDefault();
             const moduleId = button.dataset.moduleId;
-            
             console.log(`[CLICK] Clicked analyze button for module: ${moduleId}`);
             
             if (!moduleId) {
@@ -190,8 +199,48 @@
             analyzeModule(button, moduleId);
         });
         
-        console.log('[DOMContentLoaded] Event delegation registered');
+        console.log('[DOMContentLoaded] Initialization complete');
     });
+
+    // Sincronizar estado real del módulo desde el backend
+    function syncModuleState(moduleId, button) {
+        fetch(`/api/module/${moduleId}/analysis-status/`, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            console.log(`[SYNC] Module ${moduleId}:`, data);
+            
+            // Actualizar botón basado en estado real
+            if (data.is_analyzed && data.document_count > 0) {
+                // Tiene datos - mostrar como re-analizar
+                button.textContent = '🔄 Re-analizar';
+                button.style.background = '#28a745';
+                button.dataset.analyzed = 'true';
+            } else if (data.is_analyzed && data.document_count === 0) {
+                // Marcado como analizado pero SIN datos - permitir volver a analizar
+                button.textContent = '🔍 Analizar (sin datos)';
+                button.style.background = '#6c757d';
+                button.dataset.analyzed = 'false';
+            } else {
+                // No analizado
+                button.textContent = '🔍 Analizar';
+                button.style.background = '#6c757d';
+                button.dataset.analyzed = 'false';
+            }
+            button.disabled = false;
+        })
+        .catch(error => {
+            console.warn(`[SYNC] Error syncing module ${moduleId}:`, error);
+            // Si hay error, asegurar que el botón es clickeable
+            button.textContent = '🔍 Analizar';
+            button.style.background = '#6c757d';
+            button.disabled = false;
+        });
+    }
 
     // Ejecutar análisis
     function analyzeModule(button, moduleId) {
