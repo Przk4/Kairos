@@ -26,6 +26,15 @@ from .rag_service import get_rag_service
 
 logger = logging.getLogger(__name__)
 
+# Almacenamiento temporal del último flujo de prompt para debug
+_last_prompt_flow = {
+    'question': None,
+    'embeddings': [],
+    'context': None,
+    'response': None,
+    'timestamp': None
+}
+
 
 def test_api(request):
     """
@@ -254,6 +263,7 @@ def module_detail(request, module_id):
 def analyze_module_api(request, module_id):
     """
     API endpoint para iniciar análisis de un módulo.
+    Primero sincroniza items si es necesario, luego analiza.
     """
     # Verificar autenticación
     if not request.user.is_authenticated:
@@ -261,6 +271,7 @@ def analyze_module_api(request, module_id):
         return JsonResponse({'error': 'No autenticado - por favor inicia sesión primero'}, status=401)
     
     from .rag_service import get_rag_service
+    from .canvas_auth import sync_module_items
     
     logger.info(f"Analyze request for module {module_id} from user {request.user.username}")
     
@@ -289,23 +300,54 @@ def analyze_module_api(request, module_id):
             }, status=401)
         
         try:
-            # Ejecutamos RAG analysis (puede ser lento)
+            # PRIMERO: Re-sincronizar items para asegurar URLs correctas
+            logger.info(f"Re-syncing items for module {module.id} to ensure correct download URLs")
+            headers = {'Authorization': f'Bearer {access_token}'}
+            try:
+                sync_module_items(request.user, module, headers)
+                logger.info(f"Module items synced successfully")
+            except Exception as sync_error:
+                logger.warning(f"Error syncing module items: {sync_error}")
+                # No fallar, continuar con lo que tenemos
+            
+            # SEGUNDO: Ejecutamos RAG analysis (puede ser lento)
             logger.info(f"Starting RAG analysis for module {module.id}")
             rag_service = get_rag_service()
+            
+            # LOG: Revisar estado antes del análisis
+            logger.info(f"RAG Service status: using_chromadb={rag_service.using_chromadb}, client={bool(rag_service.client)}")
+            
             success = rag_service.analyze_module(module, access_token)
             
             if success:
+                # VERIFICACIÓN: Contar embeddings después del análisis
+                collection_name = f"module_{module.id}_course_{module.course.id}"
+                embeddings_count = rag_service.get_embeddings_count(collection_name)
+                
+                logger.info(f"Module {module.id} analysis result: success={success}, embeddings_count={embeddings_count}")
+                
+                if embeddings_count == 0:
+                    logger.warning(f"⚠️ WARNING: Module {module.id} marked as analyzed but 0 embeddings found! Backend: {rag_service.using_chromadb}")
+                    analysis.status = 'failed'
+                    analysis.error_message = f'Análisis completado pero sin vectores guardados. Backend: {rag_service.using_chromadb}'
+                    analysis.save()
+                    return JsonResponse({
+                        'status': 'failed',
+                        'error': f'Error al guardar vectores. Los embeddings no se guardaron. Backend: {rag_service.using_chromadb}'
+                    })
+                
                 # Actualizamos status
                 analysis.status = 'completed'
                 analysis.total_items_processed = module.items.count()
                 analysis.vector_db_path = f"module_{module.id}_course_{module.course.id}"
                 analysis.save()
                 
-                logger.info(f"Module {module.id} analysis completed for user {request.user.username}")
+                logger.info(f"Module {module.id} analysis completed with {embeddings_count} embeddings for user {request.user.username}")
                 return JsonResponse({
                     'status': 'completed',
-                    'message': f'Módulo "{module.name}" analizado correctamente. {module.items.count()} items procesados.',
-                    'items_processed': module.items.count()
+                    'message': f'Módulo "{module.name}" analizado correctamente. {module.items.count()} items, {embeddings_count} vectores guardados.',
+                    'items_processed': module.items.count(),
+                    'embeddings_count': embeddings_count
                 })
             else:
                 analysis.status = 'failed'
@@ -414,6 +456,32 @@ def chat_api(request):
                     mod_context = rag_service.search_context(question, mod.id, course.id)
                     context.extend(mod_context)
             
+            # Extraer información de embeddings para debug
+            embeddings_info = []
+            context_text = ""
+            if context:
+                if isinstance(context, list) and len(context) > 0:
+                    if isinstance(context[0], dict):
+                        for i, item in enumerate(context):
+                            embeddings_info.append({
+                                'content': item.get('content', '')[:200],
+                                'similarity': item.get('similarity', 0),
+                                'module': item.get('module', 'Unknown')
+                            })
+                            context_text += f"\n[{i+1}]: {item.get('content', '')}"
+                    else:
+                        context_text = str(context)
+            
+            # GUARDAR FLUJO PARA DEBUG
+            global _last_prompt_flow
+            _last_prompt_flow = {
+                'question': question,
+                'embeddings': embeddings_info,
+                'context': context_text[:2000],  # Primeros 2000 caracteres
+                'response': None,  # Se actualiza después
+                'timestamp': timezone.now().isoformat()
+            }
+            
             # Obtenemos respuesta de DeepSeek
             ai_service = get_ai_service()
             start_time = time.time()
@@ -427,6 +495,9 @@ def chat_api(request):
             processing_time = time.time() - start_time
             tokens = ai_response.get('tokens_used', 0)
             answer = ai_response.get('answer', '')
+            
+            # ACTUALIZAR RESPUESTA EN FLUJO DEBUG
+            _last_prompt_flow['response'] = answer
             
             # Guardamos la respuesta de IA
             ai_message = ChatMessage.objects.create(
@@ -543,6 +614,76 @@ def debug_documents(request):
         return JsonResponse({'error': str(e)}, status=500)
 
 
+@require_http_methods(["GET"])
+def debug_rag_status(request):
+    """
+    Endpoint para ver el estado actual del sistema RAG.
+    Muestra: ChromaDB status, embedding counts, backend being used, etc.
+    """
+    try:
+        rag_service = get_rag_service()
+        
+        # Información del backend
+        info = {
+            'backend': 'chromadb' if rag_service.using_chromadb else 'in_memory',
+            'chromadb_available': bool(rag_service.client),
+            'persistent_dir': rag_service.persistent_dir if rag_service.using_chromadb else None,
+            'embedding_model': 'all-MiniLM-L6-v2',
+        }
+        
+        # Si es ChromaDB, contar colecciones
+        if rag_service.using_chromadb and rag_service.client:
+            try:
+                collections = rag_service.client.list_collections()
+                collections_info = []
+                for col in collections:
+                    count = col.count()
+                    collections_info.append({
+                        'name': col.name,
+                        'embeddings_count': count
+                    })
+                info['collections'] = collections_info
+                info['total_collections'] = len(collections)
+                info['total_embeddings'] = sum(c['embeddings_count'] for c in collections_info)
+            except Exception as e:
+                logger.error(f"Error listing ChromaDB collections: {e}")
+                info['collections'] = []
+                info['error'] = str(e)
+        else:
+            # Mostrar información de memoria
+            info['in_memory_collections'] = list(rag_service.in_memory_db.keys())
+            info['total_embeddings'] = sum(
+                len(rag_service.in_memory_db[k].get('embeddings', []))
+                for k in rag_service.in_memory_db
+            )
+        
+        return JsonResponse({
+            'status': 'ok',
+            'rag_status': info
+        })
+    except Exception as e:
+        logger.error(f"Error in debug_rag_status: {e}")
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@require_http_methods(["GET"])
+def debug_prompt_flow(request):
+    """
+    Endpoint para obtener el último flujo de prompt.
+    Muestra: pregunta, embeddings recuperados, contexto y respuesta.
+    """
+    global _last_prompt_flow
+    
+    return JsonResponse({
+        'status': 'ok',
+        'last_question': _last_prompt_flow.get('question') or 'Sin pregunta registrada',
+        'embeddings': _last_prompt_flow.get('embeddings', []),
+        'rag_context': _last_prompt_flow.get('context') or 'Sin contexto',
+        'deepseek_response': _last_prompt_flow.get('response') or 'Sin respuesta registrada',
+        'timestamp': _last_prompt_flow.get('timestamp') or '?'
+    })
+
+
 @require_http_methods(["GET", "POST"])
 def test_button_click(request):
     """
@@ -583,9 +724,9 @@ def check_module_analysis_status(request, module_id):
     {
         'is_analyzed': True/False,
         'document_count': N,
-        'embedding_count': N,
-        'db_source': 'chromadb' o 'memory',
-        'last_updated': timestamp
+        'embeddings_count': N,
+        'items_count': N,
+        'status': 'analyzing'/'completed'/'failed'/'not_analyzed'
     }
     
     NO REQUIERE AUTENTICACIÓN - para que funcione la sincronización en todos los casos
@@ -601,18 +742,21 @@ def check_module_analysis_status(request, module_id):
         analyzed_docs = debug_service.get_analyzed_documents(module_id)
         document_count = len(analyzed_docs.get('documents', []))
         
-        # Verificamos si hay embeddings en la RAG service
+        # Verificamos embeddings en la RAG service
         collection_name = f"module_{module.id}_course_{module.course.id}"
-        has_embeddings = rag_service.check_collection_exists(collection_name)
+        embeddings_count = rag_service.get_embeddings_count(collection_name)
+        has_embeddings = embeddings_count > 0
         
-        # Si el debug service registró documentos, usamos eso
-        # Si no, verificamos la BD
+        # Obtener estado de la base de datos
         try:
             analysis = ModuleAnalysis.objects.get(module=module)
             db_status = analysis.status
         except ModuleAnalysis.DoesNotExist:
             analysis = None
             db_status = 'not_analyzed'
+        
+        # Contar items del módulo
+        items_count = module.items.count()
         
         is_analyzed = document_count > 0 or has_embeddings
         
@@ -621,7 +765,9 @@ def check_module_analysis_status(request, module_id):
             'module_id': module_id,
             'is_analyzed': is_analyzed,
             'document_count': document_count,
-            'db_status': db_status,
+            'embeddings_count': embeddings_count,
+            'items_count': items_count,
+            'analysis_status': db_status,  # 'analyzing', 'completed', 'failed', 'not_analyzed'
             'has_embeddings': has_embeddings,
             'collection_name': collection_name
         })
@@ -633,7 +779,9 @@ def check_module_analysis_status(request, module_id):
             'module_id': module_id,
             'is_analyzed': False,
             'document_count': 0,
-            'db_status': 'not_found',
+            'embeddings_count': 0,
+            'items_count': 0,
+            'analysis_status': 'not_found',
             'has_embeddings': False,
             'collection_name': None
         })

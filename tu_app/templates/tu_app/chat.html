@@ -19,7 +19,7 @@
         .back-btn:hover { background: rgba(255,255,255,0.3); }
         
         .chat-history { flex: 1; overflow-y: auto; padding: 20px; background: #f9f9f9; }
-        .message { margin-bottom: 15px; display: flex; animation: slideIn 0.3s ease-in; }
+        .message { margin-bottom: 20px; display: flex; animation: slideIn 0.3s ease-in; }
         
         @keyframes slideIn {
             from { opacity: 0; transform: translateY(10px); }
@@ -29,7 +29,18 @@
         .message.student { justify-content: flex-end; }
         .message.ai { justify-content: flex-start; }
         
-        .message-content { background: #007bff; color: white; padding: 12px 15px; border-radius: 12px; max-width: 70%; word-wrap: break-word; }
+        .message-content { 
+            background: #007bff; 
+            color: white; 
+            padding: 14px 18px; 
+            border-radius: 12px; 
+            max-width: 70%; 
+            word-wrap: break-word;
+            line-height: 1.6;
+            font-size: 0.95em;
+            white-space: pre-wrap;
+            overflow-wrap: break-word;
+        }
         .message.student .message-content { background: #28a745; }
         .message.ai .message-content { background: #6c757d; }
         
@@ -128,7 +139,7 @@
                                     {% else %}
                                         👤 
                                     {% endif %}
-                                    {{ message.content|truncatewords:50 }}
+                                    {{ message.content }}
                                 </div>
                                 <div class="message-time">{{ message.created_at|date:"H:i" }}</div>
                             </div>
@@ -161,6 +172,97 @@
     <script>
     let currentModuleId = null;
     const courseId = {{ course.id }};
+
+    // Sincronizar estado de módulos al cargar
+    document.addEventListener('DOMContentLoaded', function() {
+        console.log('[CHAT] Sincronizando estado de módulos...');
+        
+        // Obtener todos los items del sidebar
+        const moduleItems = document.querySelectorAll('.module-list li');
+        
+        moduleItems.forEach(li => {
+            // Saltar el primer item "Todos los módulos"
+            if (li.textContent.includes('Todos los módulos')) return;
+            
+            // Extraer module_id del onclick
+            const onclickAttr = li.getAttribute('onclick');
+            const match = onclickAttr.match(/selectModule\((\d+)\)/);
+            
+            if (match) {
+                const moduleId = match[1];
+                syncModuleStatus(moduleId, li);
+            }
+        });
+        
+        // Autorefresh cada 3 segundos
+        setInterval(() => {
+            const moduleItems = document.querySelectorAll('.module-list li');
+            moduleItems.forEach(li => {
+                if (li.textContent.includes('Todos los módulos')) return;
+                const onclickAttr = li.getAttribute('onclick');
+                const match = onclickAttr.match(/selectModule\((\d+)\)/);
+                if (match) {
+                    const moduleId = match[1];
+                    syncModuleStatus(moduleId, li);
+                }
+            });
+        }, 3000);
+    });
+
+    // Sincronizar estado real del módulo
+    function syncModuleStatus(moduleId, moduleElement) {
+        fetch(`/api/module/${moduleId}/analysis-status/`, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            // Encontrar el span de estado
+            let statusSpan = moduleElement.querySelector('span');
+            
+            if (!statusSpan) {
+                // Si no existe, crearlo
+                statusSpan = document.createElement('span');
+                statusSpan.style.fontSize = '0.8em';
+                statusSpan.style.opacity = '0.8';
+                statusSpan.style.display = 'block';
+                statusSpan.style.marginTop = '2px';
+                moduleElement.appendChild(statusSpan);
+            }
+            
+            // Obtener el nombre del módulo (texto del strong)
+            const moduleName = moduleElement.querySelector('strong').textContent;
+            const itemCount = data.items_count || 0;
+            
+            // Actualizar estado basado en datos reales
+            if (data.analysis_status === 'analyzing') {
+                statusSpan.textContent = '⏳ Analizando...';
+                statusSpan.style.color = '#ffc107';
+            } else if (data.is_analyzed && data.document_count > 0) {
+                // Analizado con datos
+                statusSpan.textContent = `✅ Analizado (${data.document_count} docs, ${data.embeddings_count} embeddings)`;
+                statusSpan.style.color = '#28a745';
+                moduleElement.style.borderLeft = '3px solid #28a745';
+            } else if (data.is_analyzed && data.document_count === 0) {
+                // Marcado como analizado pero sin datos
+                statusSpan.textContent = `⚫ Sin datos (${itemCount} items)`;
+                statusSpan.style.color = '#6c757d';
+                moduleElement.style.borderLeft = '3px solid #6c757d';
+            } else {
+                // No analizado
+                statusSpan.textContent = `⚫ Sin analizar (${itemCount} items)`;
+                statusSpan.style.color = '#999';
+                moduleElement.style.borderLeft = 'none';
+            }
+            
+            console.log(`[CHAT] Module ${moduleId}: ${statusSpan.textContent}`);
+        })
+        .catch(error => {
+            console.error(`Error syncing module ${moduleId}:`, error);
+        });
+    }
 
     // Obtener token CSRF desde Django
     function getCSRFToken() {
@@ -256,10 +358,13 @@
         const now = new Date();
         const timeStr = now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
         
+        // Procesar contenido para preservar saltos de línea
+        const formattedContent = escapeHtml(content).replace(/\n/g, '<br>');
+        
         messageDiv.innerHTML = `
             <div>
-                <div class="message-content">
-                    ${role === 'ai' ? '🤖' : '👤'} ${escapeHtml(content)}
+                <div class="message-content" style="white-space: pre-wrap;">
+                    ${role === 'ai' ? '🤖' : '👤'} ${formattedContent}
                 </div>
                 <div class="message-time">${timeStr}</div>
             </div>

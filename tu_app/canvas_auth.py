@@ -314,6 +314,7 @@ def sync_modules_for_course(user, course):
 def sync_module_items(user, module, headers):
     """
     Sincroniza los items (materiales, tareas, etc.) de un módulo.
+    Para archivos File, obtiene la URL de descarga real desde Canvas API.
     
     Args:
         user: Usuario de Django
@@ -343,6 +344,20 @@ def sync_module_items(user, module, headers):
             
             item_type = type_map.get(item_data.get('type', 'Other'), 'Other')
             
+            # Para archivos, construir la URL de descarga CORRECTA
+            # Formato: {BASE_URL}/courses/{course_id}/files/{file_id}/download?download_frd=1
+            download_url = item_data.get('url', '')
+            if item_type == 'File' and item_data.get('content_id'):
+                try:
+                    file_id = item_data.get('content_id')
+                    course_id = module.course.canvas_course_id
+                    # URL directa de descargas (NO API)
+                    download_url = f"{settings.CANVAS_BASE_URL}/courses/{course_id}/files/{file_id}/download?download_frd=1"
+                    logger.info(f"Built download URL for {item_data.get('title', '')}: {download_url}")
+                except Exception as e:
+                    logger.warning(f"Could not build download URL for file_id {file_id}: {e}")
+                    # Fallback: usar lo que Canvas proporciona
+            
             ModuleItem.objects.update_or_create(
                 module=module,
                 canvas_item_id=item_data['id'],
@@ -350,7 +365,7 @@ def sync_module_items(user, module, headers):
                     'title': item_data.get('title', ''),
                     'item_type': item_type,
                     'position': item_data.get('position', 0),
-                    'url': item_data.get('url', ''),
+                    'url': download_url,  # URL de descarga real para archivos
                     'content_id': item_data.get('content_id'),
                     'is_locked': item_data.get('completion_requirement', {}).get('type') is not None,
                     'completion_requirement': item_data.get('completion_requirement', {}).get('type', ''),

@@ -241,6 +241,55 @@
             color: #666;
             font-size: 11px;
         }
+
+        .code-block {
+            background: #1e1e1e;
+            color: #00ff00;
+            padding: 12px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+            margin-bottom: 10px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            border: 1px solid #333;
+        }
+
+        .flow-section {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border-left: 4px solid #667eea;
+        }
+
+        .flow-title {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+
+        .embedding-item {
+            background: white;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            border-left: 3px solid #4caf50;
+            font-size: 12px;
+        }
+
+        .embedding-content {
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .embedding-meta {
+            color: #999;
+            font-size: 11px;
+        }
         
         @media (max-width: 1024px) {
             .grid-3 {
@@ -373,7 +422,7 @@
                 <div class="refresh-timer" id="refresh-timer"></div>
             </div>
             
-            <!-- Base de datos en memoria -->
+        <!-- Base de datos en memoria -->
             <div class="card">
                 <h2>💾 Base de Datos en Memoria</h2>
                 <div id="memory-db" style="max-height: 400px; overflow-y: auto;">
@@ -383,6 +432,40 @@
                 </div>
                 <button onclick="refreshStats()" style="margin-top: 15px; width: 100%;">🔄 Actualizar Stats</button>
             </div>
+        </div>
+
+        <!-- Prompt & RAG Flow -->
+        <div class="card">
+            <h2>🔄 Flujo de Prompt & RAG</h2>
+            <p style="color: #999; font-size: 12px; margin-bottom: 15px;">Visualiza cómo funciona la conexión entre el prompt, embeddings y respuesta de DeepSeek</p>
+            
+            <!-- Pregunta enviada -->
+            <div class="flow-section">
+                <div class="flow-title">📝 Última Pregunta Enviada</div>
+                <div class="code-block" id="prompt-question">Esperando pregunta...</div>
+            </div>
+
+            <!-- Embeddings recuperados -->
+            <div class="flow-section">
+                <div class="flow-title">🔍 Embeddings Recuperados del RAG</div>
+                <div id="embeddings-list" style="max-height: 250px; overflow-y: auto;">
+                    <div style="color: #999; font-size: 12px;">Esperando análisis...</div>
+                </div>
+            </div>
+
+            <!-- Contexto para DeepSeek -->
+            <div class="flow-section">
+                <div class="flow-title">📋 Contexto Enviado a DeepSeek (Primer 500 caracteres)</div>
+                <div class="code-block" id="prompt-context">Esperando contexto...</div>
+            </div>
+
+            <!-- Respuesta de DeepSeek -->
+            <div class="flow-section">
+                <div class="flow-title">🤖 Respuesta de DeepSeek (Primeros 500 caracteres)</div>
+                <div class="code-block" id="deepseek-response">Esperando respuesta...</div>
+            </div>
+
+            <button onclick="refreshPromptFlow()" style="width: 100%; margin-top: 10px;">🔄 Actualizar Flujo</button>
         </div>
     </div>
 
@@ -542,8 +625,48 @@
             autoRefreshInterval = setInterval(() => {
                 refreshEvents();
                 refreshStats();
+                refreshPromptFlow();
                 updateRefreshTimer();
             }, 2000);
+        }
+
+        async function refreshPromptFlow() {
+            try {
+                const response = await fetch('/api/debug/prompt-flow/');
+                const data = await response.json();
+                
+                // Actualizar pregunta
+                document.getElementById('prompt-question').textContent = 
+                    data.last_question || 'Esperando pregunta...';
+                
+                // Actualizar embeddings
+                const embeddingsList = document.getElementById('embeddings-list');
+                if (!data.embeddings || data.embeddings.length === 0) {
+                    embeddingsList.innerHTML = '<div style="color: #999; font-size: 12px;">Sin embeddings recuperados</div>';
+                } else {
+                    let html = '';
+                    data.embeddings.forEach((emb, i) => {
+                        html += `
+                            <div class="embedding-item">
+                                <div class="embedding-content"><strong>#${i + 1}:</strong> ${emb.content.substring(0, 150)}${emb.content.length > 150 ? '...' : ''}</div>
+                                <div class="embedding-meta">📊 Similitud: ${(emb.similarity * 100).toFixed(1)}% | Módulo: ${emb.module}</div>
+                            </div>
+                        `;
+                    });
+                    embeddingsList.innerHTML = html;
+                }
+                
+                // Actualizar contexto
+                document.getElementById('prompt-context').textContent = 
+                    data.rag_context ? data.rag_context.substring(0, 500) + (data.rag_context.length > 500 ? '...' : '') : 'Esperando contexto...';
+                
+                // Actualizar respuesta DeepSeek
+                document.getElementById('deepseek-response').textContent = 
+                    data.deepseek_response ? data.deepseek_response.substring(0, 500) + (data.deepseek_response.length > 500 ? '...' : '') : 'Esperando respuesta...';
+                
+            } catch (e) {
+                console.error('Error fetching prompt flow:', e);
+            }
         }
         
         // Iniciar
