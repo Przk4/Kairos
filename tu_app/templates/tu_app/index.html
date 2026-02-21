@@ -88,11 +88,8 @@
                                                         {% if analysis.status == 'analyzing' %}
                                                             <span style="color: #ffc107; font-size: 0.85em;">⏳ Analizando...</span>
                                                         {% else %}
-                                                            {% if analysis.status == 'completed' and analysis.document_count > 0 %}
-                                                                <button class="analyze-btn" data-module-id="{{ module.id }}" style="background: #28a745; color: white; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em;">🔄 Re-analizar</button>
-                                                            {% else %}
-                                                                <button class="analyze-btn" data-module-id="{{ module.id }}" style="background: #6c757d; color: white; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em;">🔍 Analizar</button>
-                                                            {% endif %}
+                                                            <!-- Botón se actualiza automáticamente por JavaScript basado en estado real del server -->
+                                                            <button class="analyze-btn" data-module-id="{{ module.id }}" style="background: #6c757d; color: white; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em;">🔍 Analizar</button>
                                                         {% endif %}
                                                     {% endwith %}
                                                 </div>
@@ -164,24 +161,15 @@
 
     {% csrf_token %}
 
+    <!-- Cargar funciones centralizadas de sincronización de estado -->
+    <script src="/static/js/module-status-sync.js"></script>
+
     <script>
     console.log('[INIT] Script loaded');
     
     document.addEventListener('DOMContentLoaded', function() {
-        console.log('[DOMContentLoaded] Page loaded, syncing module states...');
-        
-        // Sincronizar estado real de TODOS los botones al cargar
-        const buttons = document.querySelectorAll('.analyze-btn');
-        console.log(`[DOMContentLoaded] Found ${buttons.length} analyze buttons`);
-        
-        buttons.forEach(btn => {
-            const moduleId = btn.dataset.moduleId;
-            if (moduleId) {
-                syncModuleState(moduleId, btn);
-            }
-        });
-        
-        // Usar event delegation para clicks
+        console.log('[DOMContentLoaded] Page loaded');
+        console.log('[DOMContentLoaded] Note: Module status sync is automatic via module-status-sync.js');
         document.addEventListener('click', function(e) {
             const button = e.target.closest('.analyze-btn');
             if (!button) return;
@@ -202,44 +190,10 @@
         console.log('[DOMContentLoaded] Initialization complete');
     });
 
-    // Sincronizar estado real del módulo desde el backend
+    // Sincronizar estado usando funciones centralizadas
+    // Ver module-status-sync.js para la implementación compartida
     function syncModuleState(moduleId, button) {
-        fetch(`/api/module/${moduleId}/analysis-status/`, {
-            method: 'GET',
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            console.log(`[SYNC] Module ${moduleId}:`, data);
-            
-            // Actualizar botón basado en estado real
-            if (data.is_analyzed && data.document_count > 0) {
-                // Tiene datos - mostrar como re-analizar
-                button.textContent = '🔄 Re-analizar';
-                button.style.background = '#28a745';
-                button.dataset.analyzed = 'true';
-            } else if (data.is_analyzed && data.document_count === 0) {
-                // Marcado como analizado pero SIN datos - permitir volver a analizar
-                button.textContent = '🔍 Analizar (sin datos)';
-                button.style.background = '#6c757d';
-                button.dataset.analyzed = 'false';
-            } else {
-                // No analizado
-                button.textContent = '🔍 Analizar';
-                button.style.background = '#6c757d';
-                button.dataset.analyzed = 'false';
-            }
-            button.disabled = false;
-        })
-        .catch(error => {
-            console.warn(`[SYNC] Error syncing module ${moduleId}:`, error);
-            // Si hay error, asegurar que el botón es clickeable
-            button.textContent = '🔍 Analizar';
-            button.style.background = '#6c757d';
-            button.disabled = false;
-        });
+        syncModuleStatus(moduleId, button, 'button');
     }
 
     // Ejecutar análisis

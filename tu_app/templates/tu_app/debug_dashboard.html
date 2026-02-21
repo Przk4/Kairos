@@ -605,34 +605,49 @@
         
         async function refreshStats() {
             try {
-                const response = await fetch('/api/debug/stats/');
-                const data = await response.json();
+                console.log('[Dashboard] Fetching /api/modules/stats-all/...');
                 
-                // Actualizar stats RAG
-                document.getElementById('rag-modules').textContent = data.rag.modules_analyzed;
-                document.getElementById('rag-embeddings').textContent = data.rag.total_embeddings;
-                document.getElementById('rag-last').textContent = 
-                    data.rag.last_analysis ? formatTime(data.rag.last_analysis) : '-';
+                // Obtener stats de módulos (embeddings reales de BD)
+                const moduleResponse = await fetch('/api/modules/stats-all/');
+                const moduleData = await moduleResponse.json();
+                
+                console.log('[Dashboard] ModuleResponse:', moduleData);
+                
+                // Actualizar stats de módulos - USAR DATOS DE BD siempre
+                const totalEmbeddings = moduleData.total_embeddings || 0;
+                const totalModules = moduleData.total_modules || 0;
+                
+                document.getElementById('rag-modules').textContent = totalModules;
+                document.getElementById('rag-embeddings').textContent = totalEmbeddings;
+                document.getElementById('rag-last').textContent = moduleData.timestamp || new Date().toLocaleString();
+                
+                console.log(`[Dashboard] Updated: rag-modules=${totalModules}, rag-embeddings=${totalEmbeddings}`);
+                
+                // También obtener stats de debug (para DeepSeek, eventos, etc.)
+                const debugResponse = await fetch('/api/debug/stats/');
+                const debugData = await debugResponse.json();
+                
+                console.log('[Dashboard] DebugResponse:', debugData);
                 
                 // Actualizar stats DeepSeek
-                document.getElementById('deepseek-calls').textContent = data.deepseek.total_calls;
-                document.getElementById('deepseek-tokens').textContent = data.deepseek.total_tokens;
+                document.getElementById('deepseek-calls').textContent = debugData.deepseek.total_calls;
+                document.getElementById('deepseek-tokens').textContent = debugData.deepseek.total_tokens;
                 document.getElementById('deepseek-time').textContent = 
-                    formatDuration(data.deepseek.avg_response_time);
+                    formatDuration(debugData.deepseek.avg_response_time);
                 
                 // Actualizar contadores de eventos
-                document.getElementById('total-events').textContent = data.event_counts.RAG + 
-                    data.event_counts.DEEPSEEK + data.event_counts.EMBEDDING + data.event_counts.ERROR;
-                document.getElementById('count-rag').textContent = data.event_counts.RAG;
-                document.getElementById('count-deepseek').textContent = data.event_counts.DEEPSEEK;
-                document.getElementById('count-embed').textContent = data.event_counts.EMBEDDING;
-                document.getElementById('count-errors').textContent = data.event_counts.ERROR;
+                document.getElementById('total-events').textContent = debugData.event_counts.RAG + 
+                    debugData.event_counts.DEEPSEEK + debugData.event_counts.EMBEDDING + debugData.event_counts.ERROR;
+                document.getElementById('count-rag').textContent = debugData.event_counts.RAG;
+                document.getElementById('count-deepseek').textContent = debugData.event_counts.DEEPSEEK;
+                document.getElementById('count-embed').textContent = debugData.event_counts.EMBEDDING;
+                document.getElementById('count-errors').textContent = debugData.event_counts.ERROR;
                 
                 // Actualizar base de datos en memoria
-                updateMemoryDB(data.memory_db);
+                updateMemoryDB(debugData.memory_db);
                 
             } catch (e) {
-                console.error('Error fetching stats:', e);
+                console.error('[Dashboard] Error fetching stats:', e);
             }
         }
         

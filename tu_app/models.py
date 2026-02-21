@@ -162,6 +162,28 @@ class ModuleAnalysis(models.Model):
         verbose_name_plural = "Module Analyses"
 
 
+class ModuleEmbedding(models.Model):
+    """
+    Almacena embeddings de módulos en la BD.
+    Compatible con:
+    - SQLite (JSONField) en desarrollo local
+    - PostgreSQL + pgvector en producción (DigitalOcean)
+    """
+    module = models.OneToOneField(Module, on_delete=models.CASCADE, related_name='embedding')
+    embedding_data = models.JSONField(blank=True, default=dict)
+    model_name = models.CharField(max_length=100, default='sentence-transformers/all-MiniLM-L6-v2')
+    document_count = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"Embeddings: {self.module.name} ({self.document_count} docs)"
+    
+    class Meta:
+        verbose_name = "Module Embedding"
+        verbose_name_plural = "Module Embeddings"
+
+
 class ChatMessage(models.Model):
     """
     Modelo para almacenar conversaciones entre estudiantes e IA.

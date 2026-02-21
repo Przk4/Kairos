@@ -169,99 +169,41 @@
 
     {% csrf_token %}
 
+    <!-- Cargar funciones centralizadas de sincronización de estado -->
+    <script src="/static/js/module-status-sync.js"></script>
+
     <script>
     let currentModuleId = null;
     const courseId = {{ course.id }};
+    let moduleRefreshIntervals = {}; // Guardar intervalos por módulo
 
     // Sincronizar estado de módulos al cargar
     document.addEventListener('DOMContentLoaded', function() {
-        console.log('[CHAT] Sincronizando estado de módulos...');
+        console.log('[CHAT] Module status auto-sync enabled');
         
-        // Obtener todos los items del sidebar
+        // Sincronizar TODOS los módulos inmediatamente al cargar
         const moduleItems = document.querySelectorAll('.module-list li');
-        
         moduleItems.forEach(li => {
-            // Saltar el primer item "Todos los módulos"
             if (li.textContent.includes('Todos los módulos')) return;
-            
-            // Extraer module_id del onclick
             const onclickAttr = li.getAttribute('onclick');
             const match = onclickAttr.match(/selectModule\((\d+)\)/);
-            
             if (match) {
                 const moduleId = match[1];
                 syncModuleStatus(moduleId, li);
+                
+                // Auto-refresh SOLO cada 10 segundos para evitar flickering
+                moduleRefreshIntervals[moduleId] = setInterval(() => {
+                    syncModuleStatus(moduleId, li);
+                }, 10000); // 10 segundos - menos agresivo
             }
         });
-        
-        // Autorefresh cada 3 segundos
-        setInterval(() => {
-            const moduleItems = document.querySelectorAll('.module-list li');
-            moduleItems.forEach(li => {
-                if (li.textContent.includes('Todos los módulos')) return;
-                const onclickAttr = li.getAttribute('onclick');
-                const match = onclickAttr.match(/selectModule\((\d+)\)/);
-                if (match) {
-                    const moduleId = match[1];
-                    syncModuleStatus(moduleId, li);
-                }
-            });
-        }, 3000);
     });
 
-    // Sincronizar estado real del módulo
+    // Sincronizar estado de módulo en lista - usa función centralizada
     function syncModuleStatus(moduleId, moduleElement) {
-        fetch(`/api/module/${moduleId}/analysis-status/`, {
-            method: 'GET',
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            // Encontrar el span de estado
-            let statusSpan = moduleElement.querySelector('span');
-            
-            if (!statusSpan) {
-                // Si no existe, crearlo
-                statusSpan = document.createElement('span');
-                statusSpan.style.fontSize = '0.8em';
-                statusSpan.style.opacity = '0.8';
-                statusSpan.style.display = 'block';
-                statusSpan.style.marginTop = '2px';
-                moduleElement.appendChild(statusSpan);
-            }
-            
-            // Obtener el nombre del módulo (texto del strong)
-            const moduleName = moduleElement.querySelector('strong').textContent;
-            const itemCount = data.items_count || 0;
-            
-            // Actualizar estado basado en datos reales
-            if (data.analysis_status === 'analyzing') {
-                statusSpan.textContent = '⏳ Analizando...';
-                statusSpan.style.color = '#ffc107';
-            } else if (data.is_analyzed && data.document_count > 0) {
-                // Analizado con datos
-                statusSpan.textContent = `✅ Analizado (${data.document_count} docs, ${data.embeddings_count} embeddings)`;
-                statusSpan.style.color = '#28a745';
-                moduleElement.style.borderLeft = '3px solid #28a745';
-            } else if (data.is_analyzed && data.document_count === 0) {
-                // Marcado como analizado pero sin datos
-                statusSpan.textContent = `⚫ Sin datos (${itemCount} items)`;
-                statusSpan.style.color = '#6c757d';
-                moduleElement.style.borderLeft = '3px solid #6c757d';
-            } else {
-                // No analizado
-                statusSpan.textContent = `⚫ Sin analizar (${itemCount} items)`;
-                statusSpan.style.color = '#999';
-                moduleElement.style.borderLeft = 'none';
-            }
-            
-            console.log(`[CHAT] Module ${moduleId}: ${statusSpan.textContent}`);
-        })
-        .catch(error => {
-            console.error(`Error syncing module ${moduleId}:`, error);
-        });
+        // Delegar a la función centralizada desde module-status-sync.js
+        // El elemento es de tipo 'list-item' (elemento li en la lista de módulos)
+        ModuleStatusSync.syncModuleStatus(moduleId, moduleElement, 'list-item');
     }
 
     // Obtener token CSRF desde Django

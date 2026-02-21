@@ -12,7 +12,7 @@ import logging
 import secrets
 import json
 import time
-from .models import CanvasToken, Course, Module, ModuleAnalysis, ChatMessage
+from .models import CanvasToken, Course, Module, ModuleAnalysis, ModuleEmbedding, ChatMessage
 from .canvas_auth import (
     get_valid_canvas_token, 
     refresh_canvas_token, 
@@ -270,7 +270,6 @@ def analyze_module_api(request, module_id):
         logger.warning(f"Unauthorized access attempt to analyze_module_api from {request.META.get('REMOTE_ADDR', 'unknown')}")
         return JsonResponse({'error': 'No autenticado - por favor inicia sesión primero'}, status=401)
     
-    from .rag_service import get_rag_service
     from .canvas_auth import sync_module_items
     
     logger.info(f"Analyze request for module {module_id} from user {request.user.username}")
@@ -375,8 +374,6 @@ def analyze_module_api(request, module_id):
     except Exception as e:
         logger.error(f"Unexpected error in analyze_module_api: {str(e)}", exc_info=True)
         return JsonResponse({'status': 'failed', 'error': f'Error inesperado: {str(e)}'}, status=500)
-        logger.error(f"Unexpected error in analyze_module_api: {str(e)}", exc_info=True)
-        return JsonResponse({'error': f'Error inesperado: {str(e)}'}, status=500)
 
 
 @login_required
@@ -576,11 +573,31 @@ def debug_events(request):
 def debug_stats(request):
     """
     Endpoint para obtener estadísticas del sistema.
-    Incluye stats de RAG, DeepSeek, memoria, etc.
+    Incluye stats de RAG (AHORA desde BD, no en-memoria), DeepSeek, memoria, etc.
     """
     try:
         debug_service = get_debug_service()
         stats = debug_service.get_stats()
+        
+        # NUEVO: Obtener embeddings REALES de la BD en lugar de en-memoria
+        total_embeddings = 0
+        analyzed_modules = 0
+        
+        for module in Module.objects.all():
+            try:
+                embedding = ModuleEmbedding.objects.get(module=module)
+                docs = embedding.embedding_data.get('documents', []) if embedding.embedding_data else []
+                doc_count = len(docs)
+                
+                if doc_count > 0:
+                    total_embeddings += doc_count
+                    analyzed_modules += 1
+            except ModuleEmbedding.DoesNotExist:
+                pass
+        
+        # Actualizar stats de RAG con datos REALES de BD
+        stats['rag']['total_embeddings'] = total_embeddings
+        stats['rag']['modules_analyzed'] = analyzed_modules
         
         return JsonResponse({
             'status': 'ok',
@@ -857,70 +874,69 @@ def test_button_click(request):
 @require_http_methods(["GET"])
 def check_module_analysis_status(request, module_id):
     """
-    Endpoint para verificar si un módulo tiene embeddings guardados.
-    Retorna el estado real de los datos para sincronización de UI.
+    Endpoint para verificar el estado de análisis de un módulo.
+    
+    AHORA CHECKEA MODULEEMBEDDING EN BD en lugar de archivos locales.
+    Compatible con cloud (PostgreSQL en DigitalOcean sin archivos locales).
     
     Respuesta:
     {
         'is_analyzed': True/False,
-        'document_count': N,
-        'embeddings_count': N,
+        'analysis_status': 'completed'/'analyzing'/'failed'/'not_analyzed'
         'items_count': N,
-        'status': 'analyzing'/'completed'/'failed'/'not_analyzed'
+        'has_embeddings_in_db': bool
     }
-    
-    NO REQUIERE AUTENTICACIÓN - para que funcione la sincronización en todos los casos
     """
     
     try:
-        # Verificar si el módulo existe (sin filtro de usuario)
         module = Module.objects.get(id=module_id)
-        rag_service = get_rag_service()
-        debug_service = get_debug_service()
         
-        # Obtenemos documentos del debug service
-        analyzed_docs = debug_service.get_analyzed_documents(module_id)
-        document_count = len(analyzed_docs.get('documents', []))
-        
-        # Verificamos embeddings en la RAG service
-        collection_name = f"module_{module.id}_course_{module.course.id}"
-        embeddings_count = rag_service.get_embeddings_count(collection_name)
-        has_embeddings = embeddings_count > 0
-        
-        # Obtener estado de la base de datos
+        # Obtener estado de BD
         try:
             analysis = ModuleAnalysis.objects.get(module=module)
             db_status = analysis.status
         except ModuleAnalysis.DoesNotExist:
-            analysis = None
             db_status = 'not_analyzed'
         
-        # Contar items del módulo
-        items_count = module.items.count()
+        # NUEVO: Checkear si existen embeddings en BD
+        has_embeddings_in_db = False
+        try:
+            embedding = ModuleEmbedding.objects.get(module=module)
+            # Bug fix: len() debería contar documents, no dict keys
+            docs = embedding.embedding_data.get('documents', []) if embedding.embedding_data else []
+            has_embeddings_in_db = len(docs) > 0
+        except ModuleEmbedding.DoesNotExist:
+            has_embeddings_in_db = False
         
-        # Verificar si fue analizado correctamente
-        # Priorizar: DB status de 'completed' > embeddings presence > legacy document_count
-        if db_status == 'completed':
-            is_analyzed = True
-        elif has_embeddings:
-            is_analyzed = True
-        else:
-            is_analyzed = document_count > 0
+        # FALLBACK: Si no hay en BD pero hay en filesystem, intentar cargar
+        # (Para transición gradual de archivos a BD)
+        if not has_embeddings_in_db:
+            import os, json
+            embeddings_file = f".embeddings/module_{module.id}_course_{module.course.id}.json"
+            if os.path.exists(embeddings_file):
+                try:
+                    with open(embeddings_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        has_embeddings_in_db = len(data.get('documents', [])) > 0
+                except:
+                    pass
+        
+        # Calcular is_analyzed: SOLO basado en si hay embeddings/vectores guardados
+        # No importa qué diga analysis_status - si no hay datos guardados, es "Analizar"
+        is_analyzed = has_embeddings_in_db
         
         return JsonResponse({
             'status': 'ok',
             'module_id': module_id,
             'is_analyzed': is_analyzed,
-            'document_count': document_count,
-            'embeddings_count': embeddings_count,
-            'items_count': items_count,
-            'analysis_status': db_status,  # 'analyzing', 'completed', 'failed', 'not_analyzed'
-            'has_embeddings': has_embeddings,
-            'collection_name': collection_name
+            'analysis_status': db_status,
+            'items_count': module.items.count(),
+            'document_count': 0,
+            'embeddings_count': 0,
+            'has_embeddings_in_db': has_embeddings_in_db
         })
     
     except Module.DoesNotExist:
-        # Módulo no existe, retornar estado vacío (no analizado)
         return JsonResponse({
             'status': 'ok',
             'module_id': module_id,
@@ -928,12 +944,73 @@ def check_module_analysis_status(request, module_id):
             'document_count': 0,
             'embeddings_count': 0,
             'items_count': 0,
-            'analysis_status': 'not_found',
-            'has_embeddings': False,
-            'collection_name': None
+            'analysis_status': 'not_found'
         })
     except Exception as e:
         logger.error(f"Error checking analysis status: {e}")
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@require_http_methods(["GET"])
+def get_all_modules_stats(request):
+    """
+    Endpoint para obtener el estado de TODOS los módulos y sus embeddings.
+    Usado por: Dashboard, Botones, cualquier componente que necesite ver estado real.
+    
+    Respuesta:
+    {
+        'status': 'ok',
+        'total_modules': 6,
+        'total_embeddings': 35,
+        'modules': [
+            {
+                'id': 1,
+                'name': '6 semestre',
+                'embeddings_count': 25,
+                'has_embeddings': true,
+                'button_text': 'RE-ANALIZAR'
+            },
+            ...
+        ]
+    }
+    """
+    try:
+        modules = Module.objects.all()
+        total_embeddings = 0
+        modules_data = []
+        
+        for module in modules:
+            try:
+                embedding = ModuleEmbedding.objects.get(module=module)
+                docs = embedding.embedding_data.get('documents', []) if embedding.embedding_data else []
+                doc_count = len(docs)
+            except ModuleEmbedding.DoesNotExist:
+                doc_count = 0
+            
+            # Sumar embeddings totales
+            total_embeddings += doc_count
+            
+            # Determinar estado del botón basado ÚNICAMENTE en embeddings
+            has_embeddings = doc_count > 0
+            button_text = '🔄 Re-analizar' if has_embeddings else '🔍 Analizar'
+            
+            modules_data.append({
+                'id': module.id,
+                'name': module.name,
+                'embeddings_count': doc_count,
+                'has_embeddings': has_embeddings,
+                'button_text': button_text
+            })
+        
+        return JsonResponse({
+            'status': 'ok',
+            'timestamp': str(timezone.now()),
+            'total_modules': modules.count(),
+            'total_embeddings': total_embeddings,
+            'modules': modules_data
+        })
+    except Exception as e:
+        logger.error(f"Error getting all modules stats: {e}")
         return JsonResponse({'error': str(e)}, status=500)
 
 

@@ -123,6 +123,9 @@
         </div>
     </div>
 
+    <!-- Cargar funciones centralizadas de sincronización de estado -->
+    <script src="/static/js/module-status-sync.js"></script>
+
     <script>
     // Sincronizar estado al cargar la página
     document.addEventListener('DOMContentLoaded', function() {
@@ -131,44 +134,12 @@
 
     function syncAnalysisStatus() {
         const moduleId = {{ module.id }};
+        const btn = document.getElementById('analyzeBtn');
         
-        fetch(`/api/module/${moduleId}/analysis-status/`, {
-            method: 'GET',
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            console.log('Analysis status:', data);
-            const btn = document.getElementById('analyzeBtn');
-            
-            if (data.is_analyzed && data.document_count > 0) {
-                // Ya analizado - permitir re-análisis
-                if (btn) {
-                    btn.textContent = '🔄 Re-analizar';
-                    btn.disabled = false;  // PERMITIR RE-ANÁLISIS
-                    btn.style.background = '#28a745';
-                }
-            } else {
-                // No analizado
-                if (btn) {
-                    btn.textContent = '🔍 Analizar módulo';
-                    btn.disabled = false;
-                    btn.style.background = '#6c757d';
-                }
-            }
-        })
-        .catch(error => {
-            console.warn('Error syncing status:', error);
-            // IMPORTANTE: Permiter análisis incluso si hay error
-            const btn = document.getElementById('analyzeBtn');
-            if (btn) {
-                btn.textContent = '🔍 Analizar módulo';
-                btn.disabled = false;  // SIEMPRE HABILITADO
-                btn.style.background = '#6c757d';
-            }
-        });
+        if (btn) {
+            // Usar función centralizada para sincronizar estado del botón
+            ModuleStatusSync.syncModuleStatus(moduleId, btn, 'button');
+        }
     }
 
     function analyzeModule() {
