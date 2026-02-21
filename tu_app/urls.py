@@ -22,6 +22,7 @@ urlpatterns = [
     path('api/debug/documents/', views.debug_documents, name='debug_documents'),
     path('api/debug/rag-status/', views.debug_rag_status, name='debug_rag_status'),
     path('api/debug/prompt-flow/', views.debug_prompt_flow, name='debug_prompt_flow'),
+    path('api/debug/question-embeddings/', views.debug_question_embeddings, name='debug_question_embeddings'),
     path('api/module/<int:module_id>/analysis-status/', views.check_module_analysis_status, name='check_analysis_status'),
     path('api/test-button-click/', views.test_button_click, name='test_button_click'),
     path('test-button/', views.test_button_page, name='test_button'),

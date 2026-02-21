@@ -448,27 +448,33 @@ def chat_api(request):
             
             # Si no hay módulo específico, buscamos en todos
             if module:
-                context = rag_service.search_context(question, module.id, course.id)
+                context = rag_service.search_context(question, module.id, course.id, top_k=5)
             else:
                 # Buscar en todos los módulos del curso
                 context = []
                 for mod in course.modules.all():
-                    mod_context = rag_service.search_context(question, mod.id, course.id)
+                    mod_context = rag_service.search_context(question, mod.id, course.id, top_k=3)
                     context.extend(mod_context)
             
             # Extraer información de embeddings para debug
             embeddings_info = []
             context_text = ""
+            context_count = 0
+            
             if context:
                 if isinstance(context, list) and len(context) > 0:
+                    context_count = len(context)
                     if isinstance(context[0], dict):
                         for i, item in enumerate(context):
+                            similarity = item.get('relevance_score', item.get('similarity', 0))
+                            item_title = item.get('metadata', {}).get('item_title', 'Unknown')
                             embeddings_info.append({
-                                'content': item.get('content', '')[:200],
-                                'similarity': item.get('similarity', 0),
-                                'module': item.get('module', 'Unknown')
+                                'rank': i + 1,
+                                'title': item_title,
+                                'similarity': float(similarity) if similarity else 0.0,
+                                'preview': item.get('content', '')[:150],
                             })
-                            context_text += f"\n[{i+1}]: {item.get('content', '')}"
+                            context_text += f"\n[Docs {i+1}] {item_title}\n{item.get('content', '')}"
                     else:
                         context_text = str(context)
             
@@ -476,8 +482,9 @@ def chat_api(request):
             global _last_prompt_flow
             _last_prompt_flow = {
                 'question': question,
-                'embeddings': embeddings_info,
-                'context': context_text[:2000],  # Primeros 2000 caracteres
+                'retrieved_count': context_count,
+                'retrieved_docs': embeddings_info,
+                'context': context_text[:3000],  # Primeros 3000 caracteres
                 'response': None,  # Se actualiza después
                 'timestamp': timezone.now().isoformat()
             }
@@ -677,11 +684,123 @@ def debug_prompt_flow(request):
     return JsonResponse({
         'status': 'ok',
         'last_question': _last_prompt_flow.get('question') or 'Sin pregunta registrada',
-        'embeddings': _last_prompt_flow.get('embeddings', []),
+        'question_length': _last_prompt_flow.get('question_length', 0),
+        'retrieved_count': _last_prompt_flow.get('retrieved_count', 0),
+        'retrieved_docs': _last_prompt_flow.get('retrieved_docs', []),
         'rag_context': _last_prompt_flow.get('context') or 'Sin contexto',
         'deepseek_response': _last_prompt_flow.get('response') or 'Sin respuesta registrada',
         'timestamp': _last_prompt_flow.get('timestamp') or '?'
     })
+
+
+@require_http_methods(["POST"])
+def debug_question_embeddings(request):
+    """
+    Endpoint para ver los embeddings de una pregunta y compararlos con documentos analizados.
+    
+    POST body:
+    {
+        "question": "¿Qué es...",
+        "module_id": 1,
+        "course_id": 1
+    }
+    
+    Retorna:
+    - Embedding de la pregunta (primeras 5 dimensiones)
+    - Puntuaciones de similitud con cada chunk
+    - Chunks más relevantes
+    """
+    try:
+        data = json.loads(request.body)
+        question = data.get('question', '').strip()
+        module_id = data.get('module_id')
+        course_id = data.get('course_id')
+        
+        if not question:
+            return JsonResponse({'error': 'Pregunta vacía'}, status=400)
+        
+        # Obtener RAG service para acceder al embedding model
+        rag_service = get_rag_service()
+        
+        # Paso 1: Crear embedding de la pregunta con Piragi
+        question_embedding = rag_service.embedding_model.encode(question).tolist()
+        
+        # Paso 2: Obtener embeddings de los documentos analizados
+        collection_name = f"module_{module_id}_course_{course_id}"
+        
+        if collection_name not in rag_service.in_memory_db:
+            return JsonResponse({
+                'error': f'No hay documentos analizados para este módulo',
+                'collection': collection_name
+            }, status=404)
+        
+        collection = rag_service.in_memory_db[collection_name]
+        
+        if not collection['documents']:
+            return JsonResponse({
+                'error': 'Colección vacía',
+                'collection': collection_name
+            }, status=404)
+        
+        # Paso 3: Calcular similitud coseno entre pregunta y cada chunk
+        try:
+            from sklearn.metrics.pairwise import cosine_similarity
+            similarities = [
+                float(cosine_similarity([question_embedding], [emb])[0][0])
+                for emb in collection['embeddings']
+            ]
+        except ImportError:
+            import numpy as np
+            query_norm = np.linalg.norm(question_embedding)
+            similarities = []
+            for emb in collection['embeddings']:
+                emb_norm = np.linalg.norm(emb)
+                similarity = float(np.dot(question_embedding, emb) / (query_norm * emb_norm + 1e-8))
+                similarities.append(similarity)
+        
+        # Ordenar por similitud
+        ranked_chunks = []
+        for idx, (doc, metadata, similarity) in enumerate(zip(
+            collection['documents'],
+            collection['metadatas'],
+            similarities
+        )):
+            ranked_chunks.append({
+                'rank': idx + 1,
+                'similarity': similarity,
+                'title': metadata.get('item_title', 'Unknown'),
+                'chunk_index': metadata.get('chunk_index', '0'),
+                'chunk_total': metadata.get('chunk_total', '1'),
+                'preview': doc[:200],
+                'full_content': doc,
+            })
+        
+        # Ordenar por similitud (descendente)
+        ranked_chunks.sort(key=lambda x: x['similarity'], reverse=True)
+        
+        # Sacar top 5
+        top_chunks = ranked_chunks[:5]
+        
+        return JsonResponse({
+            'status': 'ok',
+            'question': question,
+            'question_embedding_dims': len(question_embedding),
+            'question_embedding_sample': question_embedding[:5],  # Primeras 5 dimensiones como muestra
+            'total_chunks_analyzed': len(collection['documents']),
+            'similarities': {
+                'min': round(min(similarities), 3),
+                'max': round(max(similarities), 3),
+                'mean': round(sum(similarities) / len(similarities), 3),
+            },
+            'top_matches': top_chunks,
+            'all_chunks': ranked_chunks  # Todos ordenados por similitud
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'JSON inválido'}, status=400)
+    except Exception as e:
+        logger.error(f"Error en debug_question_embeddings: {e}", exc_info=True)
+        return JsonResponse({'error': str(e)}, status=500)
 
 
 @require_http_methods(["GET", "POST"])
@@ -758,7 +877,14 @@ def check_module_analysis_status(request, module_id):
         # Contar items del módulo
         items_count = module.items.count()
         
-        is_analyzed = document_count > 0 or has_embeddings
+        # Verificar si fue analizado correctamente
+        # Priorizar: DB status de 'completed' > embeddings presence > legacy document_count
+        if db_status == 'completed':
+            is_analyzed = True
+        elif has_embeddings:
+            is_analyzed = True
+        else:
+            is_analyzed = document_count > 0
         
         return JsonResponse({
             'status': 'ok',

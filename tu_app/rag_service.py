@@ -44,6 +44,34 @@ except ImportError:
     PDF_READER_AVAILABLE = False
     pdfplumber = None
 
+# Importar librerías para otros formatos de documentos
+try:
+    from pptx import Presentation
+    PPTX_AVAILABLE = True
+    logger.info("python-pptx imported successfully for PPTX processing")
+except ImportError:
+    logger.warning("python-pptx not available - PPTX processing will be disabled")
+    PPTX_AVAILABLE = False
+    Presentation = None
+
+try:
+    from docx import Document
+    DOCX_AVAILABLE = True
+    logger.info("python-docx imported successfully for DOCX processing")
+except ImportError:
+    logger.warning("python-docx not available - DOCX processing will be disabled")
+    DOCX_AVAILABLE = False
+    Document = None
+
+try:
+    from openpyxl import load_workbook
+    XLSX_AVAILABLE = True
+    logger.info("openpyxl imported successfully for XLSX processing")
+except ImportError:
+    logger.warning("openpyxl not available - XLSX processing will be disabled")
+    XLSX_AVAILABLE = False
+    load_workbook = None
+
 
 class RAGService:
     """
@@ -147,7 +175,139 @@ class RAGService:
             logger.error(f"Error extracting PDF text: {e}", exc_info=True)
             return f"[Error leyendo PDF: {str(e)[:100]}]"
     
-    def create_or_get_collection(self, collection_name: str):
+    def _extract_text_from_pptx(self, pptx_bytes) -> Optional[str]:
+        """
+        Extrae texto de un archivo PPTX (PowerPoint).
+        Extrae texto de todos los slides.
+        """
+        if not PPTX_AVAILABLE:
+            logger.warning("python-pptx not available, returning None for PPTX file")
+            return None
+        
+        try:
+            import io
+            logger.info(f"Attempting to extract PPTX with python-pptx, file size: {len(pptx_bytes)} bytes")
+            
+            presentation = Presentation(io.BytesIO(pptx_bytes))
+            logger.info(f"PPTX opened successfully, total slides: {len(presentation.slides)}")
+            
+            text = ""
+            for slide_num, slide in enumerate(presentation.slides):
+                slide_text = ""
+                
+                # Extraer texto de todas las formas (shapes) en el slide
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text:
+                        shape_text = shape.text.strip()
+                        if shape_text:
+                            slide_text += shape_text + " "
+                    
+                    # Si es una tabla, extraer su contenido
+                    if shape.shape_type == 14:  # 14 = MSO_SHAPE_TYPE.TABLE
+                        try:
+                            table = shape.table
+                            for row in table.rows:
+                                for cell in row.cells:
+                                    if cell.text.strip():
+                                        slide_text += cell.text.strip() + " "
+                        except Exception as e:
+                            logger.warning(f"Could not extract table from slide {slide_num + 1}: {e}")
+                
+                if slide_text:
+                    logger.info(f"Slide {slide_num + 1}: extracted {len(slide_text)} chars")
+                    text += f"\n--- Slide {slide_num + 1} ---\n{slide_text}"
+                else:
+                    logger.info(f"Slide {slide_num + 1}: no text found")
+            
+            final_text = text if text.strip() else "[PPTX vacío o sin contenido de texto]"
+            logger.info(f"PPTX extraction complete: total {len(final_text)} chars extracted")
+            return final_text
+        except Exception as e:
+            logger.error(f"Error extracting PPTX text: {e}", exc_info=True)
+            return None
+    
+    def _extract_text_from_docx(self, docx_bytes) -> Optional[str]:
+        """
+        Extrae texto de un archivo DOCX (Word).
+        Incluye párrafos, tablas y listas.
+        """
+        if not DOCX_AVAILABLE:
+            logger.warning("python-docx not available, returning None for DOCX file")
+            return None
+        
+        try:
+            import io
+            logger.info(f"Attempting to extract DOCX with python-docx, file size: {len(docx_bytes)} bytes")
+            
+            document = Document(io.BytesIO(docx_bytes))
+            logger.info(f"DOCX opened successfully, total paragraphs: {len(document.paragraphs)}")
+            
+            text = ""
+            
+            # Extraer párrafos
+            for para_num, paragraph in enumerate(document.paragraphs):
+                para_text = paragraph.text.strip()
+                if para_text:
+                    text += para_text + "\n"
+            
+            # Extraer tablas
+            for table_num, table in enumerate(document.tables):
+                logger.info(f"Processing table {table_num + 1} with {len(table.rows)} rows")
+                table_text = f"\n--- Tabla {table_num + 1} ---\n"
+                for row in table.rows:
+                    row_text = []
+                    for cell in row.cells:
+                        cell_text = cell.text.strip()
+                        if cell_text:
+                            row_text.append(cell_text)
+                    if row_text:
+                        table_text += " | ".join(row_text) + "\n"
+                text += table_text
+            
+            final_text = text if text.strip() else "[DOCX vacío o sin contenido]"
+            logger.info(f"DOCX extraction complete: total {len(final_text)} chars extracted")
+            return final_text
+        except Exception as e:
+            logger.error(f"Error extracting DOCX text: {e}", exc_info=True)
+            return None
+    
+    def _extract_text_from_xlsx(self, xlsx_bytes) -> Optional[str]:
+        """
+        Extrae texto de un archivo XLSX (Excel).
+        Incluye todas las celdas con contenido.
+        """
+        if not XLSX_AVAILABLE:
+            logger.warning("openpyxl not available, returning None for XLSX file")
+            return None
+        
+        try:
+            import io
+            logger.info(f"Attempting to extract XLSX with openpyxl, file size: {len(xlsx_bytes)} bytes")
+            
+            workbook = load_workbook(io.BytesIO(xlsx_bytes))
+            logger.info(f"XLSX opened successfully, total sheets: {len(workbook.sheetnames)}")
+            
+            text = ""
+            for sheet_name in workbook.sheetnames:
+                worksheet = workbook[sheet_name]
+                logger.info(f"Processing sheet: {sheet_name}")
+                
+                text += f"\n--- Sheet: {sheet_name} ---\n"
+                
+                for row in worksheet.iter_rows(values_only=True):
+                    row_text = []
+                    for cell_value in row:
+                        if cell_value is not None:
+                            row_text.append(str(cell_value).strip())
+                    if row_text:
+                        text += " | ".join(row_text) + "\n"
+            
+            final_text = text if text.strip() else "[XLSX vacío o sin contenido]"
+            logger.info(f"XLSX extraction complete: total {len(final_text)} chars extracted")
+            return final_text
+        except Exception as e:
+            logger.error(f"Error extracting XLSX text: {e}", exc_info=True)
+            return None
         """
         Crea o obtiene una colección en ChromaDB.
         Una colección por módulo para mejorar queries.
@@ -243,38 +403,105 @@ class RAGService:
                     logger.error(file_content[:500].decode('utf-8', errors='ignore'))
                     return None
             
-            # Procesar según tipo
-            if file_url.lower().endswith('.pdf'):
-                logger.info(f"[PDF PROCESSING] Extracting PDF...")
+            # Procesar según tipo de archivo
+            # Primero intenta por extensión de URL, luego por Content-Type si no tiene extensión clara
+            file_lower = file_url.lower()
+            content_type = response.headers.get('content-type', '').lower()
+            
+            logger.info(f"[FILE TYPE DETECTION] URL ends with: ...{file_url[-50:]}, Content-Type: {content_type[:80] if content_type else 'unknown'}")
+            
+            if file_lower.endswith('.pdf') or 'application/pdf' in content_type:
+                logger.info(f"[PDF PROCESSING] Extracting PDF with pdfplumber...")
                 text = self._extract_text_from_pdf(file_content)
                 if text and text.strip() and not text.startswith('['):
                     logger.info(f"[PDF PROCESSING] ✅ {len(text)} chars extracted")
                     return text
                 else:
-                    logger.warning(f"[PDF PROCESSING] ❌ Failed")
+                    logger.error(f"[PDF PROCESSING] ❌ Failed to extract readable text from PDF")
                     return None
             
-            elif file_url.lower().endswith('.txt'):
+            elif file_lower.endswith(('.pptx', '.ppt')) or 'presentation' in content_type:
+                logger.info(f"[PPTX PROCESSING] Extracting PowerPoint with python-pptx...")
+                text = self._extract_text_from_pptx(file_content)
+                if text and text.strip():
+                    logger.info(f"[PPTX PROCESSING] ✅ {len(text)} chars extracted")
+                    return text
+                else:
+                    logger.warning(f"[PPTX PROCESSING] ❌ Failed to extract text from PPTX")
+                    return None
+            
+            elif file_lower.endswith(('.docx', '.doc')) or 'wordprocessingml' in content_type or 'msword' in content_type:
+                logger.info(f"[DOCX PROCESSING] Extracting Word with python-docx...")
+                text = self._extract_text_from_docx(file_content)
+                if text and text.strip():
+                    logger.info(f"[DOCX PROCESSING] ✅ {len(text)} chars extracted")
+                    return text
+                else:
+                    logger.warning(f"[DOCX PROCESSING] ❌ Failed to extract text from DOCX")
+                    return None
+            
+            elif file_lower.endswith(('.xlsx', '.xls')) or 'spreadsheetml' in content_type or 'ms-excel' in content_type:
+                logger.info(f"[XLSX PROCESSING] Extracting Excel with openpyxl...")
+                text = self._extract_text_from_xlsx(file_content)
+                if text and text.strip():
+                    logger.info(f"[XLSX PROCESSING] ✅ {len(text)} chars extracted")
+                    return text
+                else:
+                    logger.warning(f"[XLSX PROCESSING] ❌ Failed to extract text from XLSX")
+                    return None
+            
+            elif file_lower.endswith('.txt') or 'text/plain' in content_type:
                 logger.info(f"[TXT PROCESSING] Decoding TXT...")
                 decoded = file_content.decode('utf-8', errors='ignore')
                 logger.info(f"[TXT PROCESSING] ✅ {len(decoded)} chars")
                 return decoded
             
-            elif file_url.lower().endswith(('.docx', '.doc')):
-                logger.warning(f"[DOCX] Not implemented")
-                return None
-            
             else:
-                logger.info(f"[UNKNOWN] Trying plain text...")
+                # Unknown file type - try to detect and process accordingly
+                logger.info(f"[UNKNOWN] Detecting file type from content...")
+                
+                # Try to detect by magic bytes
+                if file_content.startswith(b'%PDF'):
+                    logger.info(f"[UNKNOWN] Detected as PDF (magic bytes)")
+                    return self._extract_text_from_pdf(file_content)
+                
+                elif file_content.startswith(b'PK\x03\x04'):  # ZIP magic bytes - PPTX/DOCX/XLSX all use ZIP
+                    # Try to determine which type by examining the ZIP structure
+                    try:
+                        import zipfile
+                        import io
+                        
+                        with zipfile.ZipFile(io.BytesIO(file_content)) as zf:
+                            namelist = zf.namelist()
+                            
+                            # PPTX detection
+                            if any('slide' in n.lower() for n in namelist):
+                                logger.info(f"[UNKNOWN] Detected as PPTX (ZIP with slide files)")
+                                return self._extract_text_from_pptx(file_content)
+                            
+                            # DOCX detection
+                            elif 'word/document.xml' in namelist:
+                                logger.info(f"[UNKNOWN] Detected as DOCX (ZIP with word/document.xml)")
+                                return self._extract_text_from_docx(file_content)
+                            
+                            # XLSX detection
+                            elif 'xl/workbook.xml' in namelist:
+                                logger.info(f"[UNKNOWN] Detected as XLSX (ZIP with xl/workbook.xml)")
+                                return self._extract_text_from_xlsx(file_content)
+                    except Exception as e:
+                        logger.warning(f"Could not determine ZIP type: {e}")
+                
+                # Try as text
                 try:
-                    decoded = file_content.decode('utf-8', errors='ignore')
+                    decoded = file_content.decode('utf-8', errors='strict')
                     if decoded.strip():
-                        logger.info(f"[UNKNOWN] ✅ {len(decoded)} chars")
+                        logger.info(f"[UNKNOWN] ✅ Decoded as text: {len(decoded)} chars")
                         return decoded
-                    return None
-                except:
-                    logger.warning(f"[UNKNOWN] Binary file")
-                    return None
+                except UnicodeDecodeError:
+                    pass
+                
+                logger.warning(f"[UNKNOWN] ❌ Cannot determine file type or extract text")
+                return None
             
         except requests.exceptions.RequestException as e:
             logger.error(f"[FILE DOWNLOAD] ❌ {type(e).__name__}: {e}")
@@ -286,6 +513,7 @@ class RAGService:
     def _chunk_text(self, text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
         """
         Divide texto en chunks con overlap para mejor búsqueda.
+        GARANTIZA: al menos 1 chunk, y si el contenido es muy largo, crea múltiples.
         
         Args:
             text: Texto a dividir
@@ -293,8 +521,12 @@ class RAGService:
             overlap: Overlap entre chunks para contexto
         
         Returns:
-            Lista de chunks
+            Lista de chunks (nunca vacía)
         """
+        if not text or not text.strip():
+            return [text] if text else [""]
+        
+        # Si el texto es pequeño, devolver como está
         if len(text) <= chunk_size:
             return [text]
         
@@ -304,8 +536,13 @@ class RAGService:
         while start < len(text):
             end = start + chunk_size
             chunk = text[start:end]
-            chunks.append(chunk)
+            if chunk.strip():  # Solo agregar si no está vacío
+                chunks.append(chunk)
             start = end - overlap  # Overlap para contexto
+        
+        # Garantizar que devolvemos al menos 1 chunk
+        if not chunks:
+            chunks = [text]
         
         return chunks
     
@@ -356,24 +593,46 @@ class RAGService:
             
             for i, item in enumerate(items):
                 try:
+                    logger.info(f"[ITEM {i+1}/{len(items)}] Processing: {item.title}")
+                    
                     # Obtener texto del item
                     text = f"{item.title} - {item.get_item_type_display()}"
+                    extracted = None
+                    is_external_content = False
                     
                     if item.url:
+                        logger.info(f"  [EXTRACT] File URL: {item.url[:80]}...")
                         extracted = self._extract_text_from_file(item.url, user_token)
-                        if extracted:
-                            text = f"{text}\n\n{extracted}"
-                    
-                    # Si el contenido es muy grande, dividir en chunks
-                    # Si es pequeño (< 2000 chars), guardar como documento único
-                    is_large_content = len(text) > 2000
-                    
-                    if is_large_content and extracted:
-                        # Dividir el contenido extraído en chunks
-                        title_and_type = f"{item.title} - {item.get_item_type_display()}"
-                        chunks = self._chunk_text(text, chunk_size=5000, overlap=500)
                         
-                        logger.info(f"[CHUNKING] {item.title}: {len(text)} chars -> {len(chunks)} chunks")
+                        # Log detallado del resultado de extracción
+                        if extracted:
+                            logger.info(f"  [EXTRACT] ✅ Got {len(extracted)} chars")
+                            text = f"{text}\n\n{extracted}"
+                            is_external_content = True
+                        else:
+                            logger.warning(f"  [EXTRACT] ❌ Failed to extract content (returned None)")
+                            logger.warning(f"  [EXTRACT] Will use only title: '{text}' ({len(text)} chars)")
+                            # IMPORTANTE: Si no se extrae, seguir adelante con solo el título
+                            is_external_content = False
+                    
+                    # Validar que el documento no sea binario corrupto
+                    if is_external_content and text.startswith('%PDF'):
+                        logger.error(f"  [VALIDATE] ❌ Document contains raw PDF binary - skipping!")
+                        continue
+                    
+                    # Si el contenido tiene texto extraído, siempre dividirnos en chunks
+                    # Esto garantiza múltiples embeddings para mejor retrieval
+                    if extracted:
+                        # Dividir el contenido extraído en chunks más pequeños
+                        # Usar chunks de 1000 chars (más pequeños) para garantizar múltiples chunks
+                        chunks = self._chunk_text(text, chunk_size=1000, overlap=300)
+                        
+                        # Forzar al menos 2 chunks si es contenido extraído
+                        # Si tenemos solo 1 chunk pero es contenido extraído, dividir artificialmente
+                        if len(chunks) == 1 and len(chunks[0]) > 500:
+                            chunks = self._chunk_text(chunks[0], chunk_size=500, overlap=150)
+                        
+                        logger.info(f"  [CHUNKS] {len(text)} chars -> {len(chunks)} chunks (forced >= 2 if extracted)")
                         
                         # Crear embedding para cada chunk
                         for chunk_idx, chunk in enumerate(chunks):
@@ -388,6 +647,7 @@ class RAGService:
                                 'module_id': str(module.id),
                                 'chunk_index': str(chunk_idx),
                                 'chunk_total': str(len(chunks)),
+                                'has_content': 'yes' if is_external_content else 'no',
                             }
                             
                             if self.using_chromadb and self.client:
@@ -402,26 +662,20 @@ class RAGService:
                                 collection['documents'].append(chunk)
                                 collection['embeddings'].append(embedding)
                                 collection['metadatas'].append(metadata)
+                        
+                        logger.debug(f"  [DONE] Created {len(chunks)} embeddings")
                     else:
-                        # Documento pequeño - guardar como está
+                        # Sin contenido extraído - usar solo título como documento
                         embedding = self.embedding_model.encode(text).tolist()
                         embeddings_count += 1
                         
-                        # Almacenar documento para logging
-                        analyzed_documents.append({
-                            'item_id': item.id,
-                            'title': item.title,
-                            'item_type': item.get_item_type_display(),
-                            'content': text[:300],  # Primeros 300 caracteres
-                        })
-                        
-                        # Almacenar
                         doc_id = f"item_{item.id}"
                         metadata = {
                             'item_id': str(item.id),
                             'item_title': item.title,
                             'item_type': item.get_item_type_display(),
                             'module_id': str(module.id),
+                            'has_content': 'no',
                         }
                         
                         if self.using_chromadb and self.client:
@@ -436,10 +690,12 @@ class RAGService:
                             collection['documents'].append(text)
                             collection['embeddings'].append(embedding)
                             collection['metadatas'].append(metadata)
+                        
+                        logger.debug(f"  [DONE] Created 1 embedding (sin contenido extraído)")
+
                     
                     # Log del embedding
                     debug_service.log_embedding_created(item.id, item.title, len(embedding))
-                    logger.debug(f"Processed item {i+1}/{len(items)}: {item.title}")
                     
                 except Exception as e:
                     logger.error(f"Error processing item {item.id}: {e}")
@@ -470,7 +726,7 @@ class RAGService:
             return False
     
     def search_context(self, query: str, module_id: int, course_id: int, 
-                      top_k: int = 3) -> List[dict]:
+                      top_k: int = 5) -> List[dict]:
         """
         Busca contexto relevante en la base de conocimiento.
         

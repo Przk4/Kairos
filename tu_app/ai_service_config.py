@@ -142,13 +142,20 @@ Por favor, responde basándote en el contexto proporcionado."""
         
         lines = []
         for i, doc in enumerate(context, 1):
-            content = doc.get('content', '')[:200]  # Primeros 200 chars
+            content = doc.get('content', '')  # ENVIAMOS TODO EL CONTENIDO DEL CHUNK
             metadata = doc.get('metadata', {})
             title = metadata.get('item_title', 'Sin título')
+            chunk_idx = metadata.get('chunk_index', '0')
+            chunk_total = metadata.get('chunk_total', '1')
             relevance = doc.get('relevance_score', 0)
             
-            lines.append(f"{i}. {title} (relevancia: {relevance:.2f})")
-            lines.append(f"   {content}...\n")
+            # Formato mejorado con información del chunk
+            lines.append(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            lines.append(f"📄 [{i}] {title} (Chunk {chunk_idx}/{chunk_total})")
+            lines.append(f"🎯 Relevancia: {relevance:.3f}")
+            lines.append(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            lines.append(f"{content}")
+            lines.append("")
         
         return "\n".join(lines)
 
