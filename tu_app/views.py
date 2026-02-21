@@ -678,6 +678,27 @@ def debug_prompt_flow(request):
     """
     Endpoint para obtener el último flujo de prompt.
     Muestra: pregunta, embeddings recuperados, contexto y respuesta.
+    
+    UTILIZADO POR: /debug/dashboard/ - Actualiza en tiempo real cada 2 segundos
+    
+    Retorna:
+    {
+        'last_question': str,
+        'question_length': int,
+        'retrieved_count': int,
+        'retrieved_docs': [
+            {
+                'rank': int,                    # Posición en ranking
+                'title': str,                   # Título del documento
+                'similarity': float (0.0-1.0),  # Puntuación de similitud
+                'preview': str                  # Primeros 150 caracteres
+            },
+            ...
+        ],
+        'rag_context': str,                    # Contexto formateado para DeepSeek
+        'deepseek_response': str,              # Respuesta del modelo
+        'timestamp': str                       # ISO format timestamp
+    }
     """
     global _last_prompt_flow
     
@@ -914,6 +935,59 @@ def check_module_analysis_status(request, module_id):
     except Exception as e:
         logger.error(f"Error checking analysis status: {e}")
         return JsonResponse({'error': str(e)}, status=500)
+
+
+def debug_test_data(request):
+    """
+    Endpoint para generar datos de prueba en el debug dashboard.
+    Útil para ver cómo se ve el dashboard con datos reales.
+    """
+    global _last_prompt_flow
+    
+    # Generar datos de prueba
+    mock_data = {
+        'question': '¿Cuál es el propósito principal del aprendizaje automático en sistemas educativos?',
+        'retrieved_count': 3,
+        'retrieved_docs': [
+            {
+                'rank': 1,
+                'title': 'Introduction to Machine Learning',
+                'similarity': 0.945,
+                'preview': 'El aprendizaje automático es una rama de la inteligencia artificial que permite que las máquinas aprendan de los datos sin ser programadas explícitamente...'
+            },
+            {
+                'rank': 2,
+                'title': 'ML Applications in Education',
+                'similarity': 0.872,
+                'preview': 'Las aplicaciones del aprendizaje automático en educación transforman la forma en que los estudiantes aprenden. Desde sistemas de recomendación personalizados...'
+            },
+            {
+                'rank': 3,
+                'title': 'Neural Networks Basics',
+                'similarity': 0.756,
+                'preview': 'Las redes neuronales son modelos computacionales inspirados en el cerebro humano. Consisten en capas de neuronas artificiales conectadas...'
+            }
+        ],
+        'context': '''[Docs 1] Introduction to Machine Learning
+El aprendizaje automático es una rama de la inteligencia artificial que permite que las máquinas aprendan de los datos sin ser programadas explícitamente. Mediante algoritmos y técnicas estadísticas, los sistemas de ML pueden identificar patrones, hacer predicciones y mejorar continuamente.
+
+[Docs 2] ML Applications in Education
+Las aplicaciones del aprendizaje automático en educación transforman la forma en que los estudiantes aprenden. Desde sistemas de recomendación personalizados hasta análisis predictivo del rendimiento estudiantil, el ML permite una educación más adaptativa y personalizada.
+
+[Docs 3] Neural Networks Basics
+Las redes neuronales son modelos computacionales inspirados en el cerebro humano. Consisten en capas de neuronas artificiales conectadas mediante pesos sinápticos, permitiendo el aprendizaje profundo y procesamiento complejo de datos.''',
+        'response': 'El aprendizaje automático juega un papel crucial en los sistemas educativos modernos. Como se puede ver en los documentos recuperados, el ML permite personalizar la experiencia de aprendizaje para cada estudiante, predecir problemas académicos y adaptar dinámicamente el contenido.\n\nLos principales propósitos incluyen:\n\n1. **Personalización**: Los sistemas de ML pueden adaptar el contenido y la velocidad de aprendizaje a las necesidades individuales de cada estudiante.\n\n2. **Predicción de Rendimiento**: Mediante el análisis de patrones históricos, se pueden identificar estudiantes que podrían necesitar apoyo adicional.\n\n3. **Optimización de Recursos**: El ML ayuda a instituciones a asignar recursos educativos de manera más eficiente.\n\n4. **Retroalimentación Inmediata**: Los sistemas pueden proporcionar feedback instantáneo sobre el desempeño del estudiante.\n\nEsta integración de tecnología ML en educación representa un cambio fundamental hacia sistemas más inteligentes, adaptativos y centrados en el estudiante.',
+        'timestamp': timezone.now().isoformat()
+    }
+    
+    _last_prompt_flow = mock_data
+    
+    return JsonResponse({
+        'status': 'ok',
+        'message': 'Datos de prueba generados exitosamente en _last_prompt_flow',
+        'docs_count': len(mock_data['retrieved_docs']),
+        'timestamp': mock_data['timestamp']
+    })
 
 
 def debug_dashboard(request):

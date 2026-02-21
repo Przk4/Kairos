@@ -290,6 +290,55 @@
             color: #999;
             font-size: 11px;
         }
+
+        .chunk-item {
+            background: #2a2a2a;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            border-left: 3px solid #4CAF50;
+            font-size: 12px;
+            color: #ddd;
+        }
+
+        .chunk-item:hover {
+            background: #333;
+        }
+
+        .similarity-bar {
+            background: #1a1a1a;
+            height: 6px;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+
+        .similarity-fill {
+            background: linear-gradient(90deg, #4CAF50, #45a049);
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding-right: 3px;
+        }
+
+        .info-badge {
+            display: inline-block;
+            background: rgba(76, 175, 80, 0.2);
+            border: 1px solid #4CAF50;
+            color: #4CAF50;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            margin-bottom: 12px;
+        }
+
+        .flow-section-title {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
         
         @media (max-width: 1024px) {
             .grid-3 {
@@ -439,6 +488,12 @@
             <h2>🔄 Flujo de Prompt & RAG</h2>
             <p style="color: #999; font-size: 12px; margin-bottom: 15px;">Visualiza cómo funciona la conexión entre el prompt, embeddings y respuesta de DeepSeek</p>
             
+            <!-- Botones de utilidad -->
+            <div class="button-group" style="margin-bottom: 15px;">
+                <button onclick="refreshPromptFlow()" style="flex: 1;">🔄 Actualizar Flujo</button>
+                <button onclick="generateTestData()" style="flex: 1; background: #FF9800;">📝 Generar Datos de Prueba</button>
+            </div>
+            
             <!-- Pregunta enviada -->
             <div class="flow-section">
                 <div class="flow-title">📝 Última Pregunta Enviada</div>
@@ -447,21 +502,33 @@
 
             <!-- Embeddings recuperados -->
             <div class="flow-section">
-                <div class="flow-title">🔍 Embeddings Recuperados del RAG</div>
-                <div id="embeddings-list" style="max-height: 250px; overflow-y: auto;">
+                <div class="flow-title">🎯 Chunks Recuperados y Filtrados por Similitud RAG</div>
+                
+                <!-- Estadísticas de filtrado -->
+                <div id="rag-stats-container" style="background: rgba(76, 175, 80, 0.15); border: 1px solid #4CAF50; border-radius: 6px; padding: 10px; margin-bottom: 12px; font-size: 12px;">
+                    <div style="color: #4CAF50; margin-bottom: 8px;">
+                        <strong>📊 Resumen del Filtrado RAG:</strong>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; color: #ddd;">
+                        <div>Chunks Recuperados: <span id="retrieved-count" style="color: #4CAF50; font-weight: bold;">0</span></div>
+                        <div>Similitud Mínima: <span id="min-similarity" style="color: #4CAF50; font-weight: bold;">-</span></div>
+                    </div>
+                </div>
+                
+                <div id="embeddings-list" style="max-height: 350px; overflow-y: auto;">
                     <div style="color: #999; font-size: 12px;">Esperando análisis...</div>
                 </div>
             </div>
 
             <!-- Contexto para DeepSeek -->
             <div class="flow-section">
-                <div class="flow-title">📋 Contexto Enviado a DeepSeek (Primer 500 caracteres)</div>
+                <div class="flow-title">📋 Contexto Completo Enviado a DeepSeek</div>
                 <div class="code-block" id="prompt-context">Esperando contexto...</div>
             </div>
 
             <!-- Respuesta de DeepSeek -->
             <div class="flow-section">
-                <div class="flow-title">🤖 Respuesta de DeepSeek (Primeros 500 caracteres)</div>
+                <div class="flow-title">🤖 Respuesta de DeepSeek</div>
                 <div class="code-block" id="deepseek-response">Esperando respuesta...</div>
             </div>
 
@@ -619,6 +686,25 @@
                 alert('Esta función requiere un endpoint adicional');
             }
         }
+
+        async function generateTestData() {
+            try {
+                const response = await fetch('/api/debug/test-data/');
+                const data = await response.json();
+                
+                if (data.status === 'ok') {
+                    // Refrescar inmediatamente después de generar datos
+                    await new Promise(resolve => setTimeout(resolve, 300));
+                    refreshPromptFlow();
+                    alert(`✅ Datos de prueba generados: ${data.docs_count} chunks`);
+                } else {
+                    alert('❌ Error al generar datos de prueba');
+                }
+            } catch (e) {
+                console.error('Error generating test data:', e);
+                alert('❌ Error: ' + e.message);
+            }
+        }
         
         // Autorefresh cada 2 segundos
         function startAutoRefresh() {
@@ -636,34 +722,92 @@
                 const data = await response.json();
                 
                 // Actualizar pregunta
-                document.getElementById('prompt-question').textContent = 
-                    data.last_question || 'Esperando pregunta...';
+                const questionDiv = document.getElementById('prompt-question');
+                questionDiv.textContent = data.last_question || 'Esperando pregunta...';
+                if (data.last_question) {
+                    questionDiv.parentElement.style.borderLeft = '4px solid #4CAF50';
+                }
                 
-                // Actualizar embeddings
+                // Actualizar información de contexto RAG (CHUNKS RECUPERADOS)
                 const embeddingsList = document.getElementById('embeddings-list');
-                if (!data.embeddings || data.embeddings.length === 0) {
-                    embeddingsList.innerHTML = '<div style="color: #999; font-size: 12px;">Sin embeddings recuperados</div>';
+                if (!data.retrieved_docs || data.retrieved_docs.length === 0) {
+                    embeddingsList.innerHTML = '<div style="color: #999; font-size: 12px;">Sin documentos recuperados</div>';
+                    embeddingsList.parentElement.style.borderLeft = '4px solid #ff9800';
                 } else {
-                    let html = '';
-                    data.embeddings.forEach((emb, i) => {
+                    // Actualizar estadísticas
+                    document.getElementById('retrieved-count').textContent = data.retrieved_docs.length;
+                    if (data.retrieved_docs.length > 0) {
+                        const minSimilarity = Math.min(...data.retrieved_docs.map(d => d.similarity));
+                        document.getElementById('min-similarity').textContent = (minSimilarity * 100).toFixed(1) + '%';
+                    }
+                    
+                    // Construir HTML con mejor visualización
+                    let html = `
+                        <div style="background: rgba(76, 175, 80, 0.1); border: 1px solid #4CAF50; border-radius: 6px; padding: 12px; margin-bottom: 15px;">
+                            <div style="color: #4CAF50; margin-bottom: 10px; font-weight: bold;">✓ Se recuperaron ${data.retrieved_docs.length} chunks (ordenados por similitud):</div>
+                    `;
+                    
+                    data.retrieved_docs.forEach((doc, i) => {
+                        const barWidth = (doc.similarity * 100);
+                        const confidence = doc.similarity >= 0.7 ? '🟢 Alta' : doc.similarity >= 0.5 ? '🟡 Media' : '🔴 Baja';
                         html += `
-                            <div class="embedding-item">
-                                <div class="embedding-content"><strong>#${i + 1}:</strong> ${emb.content.substring(0, 150)}${emb.content.length > 150 ? '...' : ''}</div>
-                                <div class="embedding-meta">📊 Similitud: ${(emb.similarity * 100).toFixed(1)}% | Módulo: ${emb.module}</div>
+                            <div class="chunk-item">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                    <div style="font-weight: bold; color: #fff; flex: 1;">
+                                        <span style="color: #4CAF50;">#${doc.rank}</span> — ${doc.title}
+                                    </div>
+                                    <div style="background: #1a1a1a; padding: 4px 8px; border-radius: 4px; font-size: 10px; color: #4CAF50; white-space: nowrap; margin-left: 10px;">
+                                        ${(doc.similarity * 100).toFixed(1)}% ${confidence}
+                                    </div>
+                                </div>
+                                <div class="similarity-bar">
+                                    <div class="similarity-fill" style="width: ${barWidth}%;"></div>
+                                </div>
+                                <div style="color: #bbb; font-size: 11px; line-height: 1.5; max-height: 60px; overflow: auto; background: rgba(0,0,0,0.5); padding: 8px; border-radius: 4px; border-left: 2px solid #4CAF50;">
+                                    ${doc.preview}
+                                </div>
                             </div>
                         `;
                     });
+                    html += '</div>';
                     embeddingsList.innerHTML = html;
+                    embeddingsList.parentElement.style.borderLeft = '4px solid #4CAF50';
                 }
                 
-                // Actualizar contexto
-                document.getElementById('prompt-context').textContent = 
-                    data.rag_context ? data.rag_context.substring(0, 500) + (data.rag_context.length > 500 ? '...' : '') : 'Esperando contexto...';
+                // Actualizar contexto completo (RAG_CONTEXT)
+                const contextDiv = document.getElementById('prompt-context');
+                if (data.rag_context && data.rag_context.length > 0) {
+                    const lines = data.rag_context.split('\n');
+                    let contextHtml = '<div style="font-size: 11px; line-height: 1.6; color: #ddd;">';
+                    lines.slice(0, 40).forEach(line => {
+                        if (line.startsWith('[Docs')) {
+                            contextHtml += `<div style="color: #4CAF50; font-weight: bold; margin-top: 15px; margin-bottom: 5px;">${line}</div>`;
+                        } else if (line.trim()) {
+                            contextHtml += `<div style="margin-bottom: 3px;">${line}</div>`;
+                        }
+                    });
+                    if (lines.length > 40) {
+                        contextHtml += `<div style="color: #666; margin-top: 10px; text-align: center;">... [${lines.length - 40} líneas más] ...</div>`;
+                    }
+                    contextHtml += '</div>';
+                    contextDiv.innerHTML = contextHtml;
+                    contextDiv.parentElement.style.borderLeft = '4px solid #2196F3';
+                } else {
+                    contextDiv.innerHTML = '<div style="color: #666;">Esperando contexto...</div>';
+                    contextDiv.parentElement.style.borderLeft = '4px solid #ff9800';
+                }
                 
                 // Actualizar respuesta DeepSeek
-                document.getElementById('deepseek-response').textContent = 
-                    data.deepseek_response ? data.deepseek_response.substring(0, 500) + (data.deepseek_response.length > 500 ? '...' : '') : 'Esperando respuesta...';
-                
+                const responseDiv = document.getElementById('deepseek-response');
+                if (data.deepseek_response) {
+                    responseDiv.textContent = data.deepseek_response.length > 1000 ? 
+                        data.deepseek_response.substring(0, 1000) + '\n\n... [Respuesta truncada] ...' : 
+                        data.deepseek_response;
+                    responseDiv.parentElement.style.borderLeft = '4px solid #9C27B0';
+                } else {
+                    responseDiv.textContent = 'Esperando respuesta...';
+                    responseDiv.parentElement.style.borderLeft = '4px solid #ff9800';
+                }
             } catch (e) {
                 console.error('Error fetching prompt flow:', e);
             }
