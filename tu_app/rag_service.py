@@ -546,6 +546,77 @@ class RAGService:
         
         return chunks
     
+    def _chunk_text_semantic(self, text: str, similarity_threshold: float = 0.5, min_chunk_size: int = 100) -> List[str]:
+        """
+        Divide texto en chunks basado en cambios temáticos (SEMANTIC).
+        Detecta límites naturales cuando la similaridad entre oraciones cae.
+        
+        Args:
+            text: Texto a dividir
+            similarity_threshold: Si similaridad < threshold → nuevo chunk (0.0-1.0)
+            min_chunk_size: Tamaño mínimo de chunk en caracteres
+        
+        Returns:
+            Lista de chunks semánticos
+        """
+        if not text or not text.strip():
+            return [text] if text else [""]
+        
+        # Si el texto es pequeño, devolver completo
+        if len(text) < min_chunk_size * 2:
+            return [text]
+        
+        import re
+        import numpy as np
+        
+        # Dividir en oraciones (regex simple pero efectivo)
+        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        if len(sentences) <= 1:
+            return [text]
+        
+        try:
+            # Calcular embeddings para cada oración (BATCH = rápido)
+            logger.info(f"[SEMANTIC] Computing embeddings for {len(sentences)} sentences...")
+            embeddings = self.embedding_model.encode(sentences, show_progress_bar=False)
+            embeddings = np.array(embeddings)
+            
+            # Calcular similaridad coseno entre oraciones consecutivas
+            chunks = []
+            current_chunk = sentences[0]
+            
+            for i in range(1, len(sentences)):
+                # Similaridad coseno: dot(a,b) / (norm(a) * norm(b))
+                dot_product = np.dot(embeddings[i-1], embeddings[i])
+                norm_product = np.linalg.norm(embeddings[i-1]) * np.linalg.norm(embeddings[i])
+                similarity = dot_product / norm_product if norm_product > 0 else 0
+                
+                # Si similaridad BAJA → tema diferente → nuevo chunk
+                if similarity < similarity_threshold and len(current_chunk) >= min_chunk_size:
+                    chunks.append(current_chunk)
+                    current_chunk = sentences[i]
+                    logger.debug(f"  [SEMANTIC] New chunk (sim={similarity:.3f}): {sentences[i][:50]}...")
+                else:
+                    # Continuar acumulando en el mismo chunk
+                    current_chunk += " " + sentences[i]
+            
+            # Agregar último chunk
+            if current_chunk:
+                chunks.append(current_chunk)
+            
+            # Garantizar chunks válidos
+            if not chunks:
+                chunks = [text]
+            
+            logger.info(f"[SEMANTIC] ✅ {len(sentences)} sentences → {len(chunks)} semantic chunks")
+            return chunks
+            
+        except Exception as e:
+            logger.warning(f"[SEMANTIC] Error: {e}. Fallback a sliding window.")
+            # Fallback al método original si hay error
+            return self._chunk_text(text, chunk_size=1000, overlap=200)
+    
     def analyze_module(self, module, user_token: str) -> bool:
         """
         Analiza todos los items de un módulo y crea embeddings.
@@ -620,19 +691,17 @@ class RAGService:
                         logger.error(f"  [VALIDATE] ❌ Document contains raw PDF binary - skipping!")
                         continue
                     
-                    # Si el contenido tiene texto extraído, siempre dividirnos en chunks
-                    # Esto garantiza múltiples embeddings para mejor retrieval
+                    # Si el contenido tiene texto extraído, usar SEMANTIC CHUNKING
+                    # Esto divide por cambios temáticos, no solo tamaño
                     if extracted:
-                        # Dividir el contenido extraído en chunks más pequeños
-                        # Usar chunks de 1000 chars (más pequeños) para garantizar múltiples chunks
-                        chunks = self._chunk_text(text, chunk_size=1000, overlap=300)
+                        # ✨ SEMANTIC: Divide detectando cambios de tema
+                        chunks = self._chunk_text_semantic(
+                            text,
+                            similarity_threshold=0.45,
+                            min_chunk_size=150
+                        )
                         
-                        # Forzar al menos 2 chunks si es contenido extraído
-                        # Si tenemos solo 1 chunk pero es contenido extraído, dividir artificialmente
-                        if len(chunks) == 1 and len(chunks[0]) > 500:
-                            chunks = self._chunk_text(chunks[0], chunk_size=500, overlap=150)
-                        
-                        logger.info(f"  [CHUNKS] {len(text)} chars -> {len(chunks)} chunks (forced >= 2 if extracted)")
+                        logger.info(f"  [SEMANTIC] {len(text)} chars → {len(chunks)} semantic chunks")
                         
                         # Crear embedding para cada chunk
                         for chunk_idx, chunk in enumerate(chunks):
