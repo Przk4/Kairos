@@ -54,10 +54,12 @@
         
         .sidebar h3 { color: #007bff; margin-bottom: 15px; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
         .module-list { list-style: none; }
-        .module-list li { padding: 10px; background: #f8f9fa; margin-bottom: 8px; border-radius: 5px; cursor: pointer; transition: all 0.3s; }
+        .module-list li { padding: 10px; background: #f8f9fa; margin-bottom: 8px; border-radius: 5px; cursor: pointer; transition: all 0.3s; color: #333; }
         .module-list li:hover { background: #e7f3ff; }
-        .module-list li.active { background: #007bff; color: white; }
+        .module-list li.active { background: #007bff; color: white; border-left: none; }
         .module-list li.active:hover { background: #0056b3; }
+        .module-list li.active span { color: white; }
+        .module-list li.active strong { color: white; }
         
         .module-info { background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
         .module-info h4 { color: #0056b3; margin-bottom: 10px; }
@@ -169,65 +171,95 @@
 
     {% csrf_token %}
 
-    <!-- Cargar funciones centralizadas de sincronización de estado -->
-    <script src="/static/js/module-status-sync.js"></script>
+
 
     <script>
     let currentModuleId = null;
     const courseId = {{ course.id }};
-    let moduleRefreshIntervals = {}; // Guardar intervalos por módulo
+    let moduleRefreshIntervals = {};
 
-    // Sincronizar estado de módulos al cargar
+    // ========== SINCRONIZACIÓN DE ESTADO ==========
+    // Al cargar la página, sincronizar estado de TODOS los módulos
     document.addEventListener('DOMContentLoaded', function() {
-        console.log('[CHAT] Module status auto-sync enabled');
+        console.log('[CHAT] Initializing module status sync');
         
-        // Sincronizar TODOS los módulos inmediatamente al cargar
         const moduleItems = document.querySelectorAll('.module-list li');
         moduleItems.forEach(li => {
+            // Saltar "Todos los módulos"
             if (li.textContent.includes('Todos los módulos')) return;
+            
+            // Extraer ID del módulo del atributo onclick
             const onclickAttr = li.getAttribute('onclick');
-            const match = onclickAttr.match(/selectModule\((\d+)\)/);
+            const match = onclickAttr.match(/selectModule\(this,\s*(\d+)\)/);
             if (match) {
                 const moduleId = match[1];
-                syncModuleStatus(moduleId, li);
-                
-                // Auto-refresh SOLO cada 10 segundos para evitar flickering
+                // Sincronizar estado (solo actualiza texto, no colores)
+                syncModuleStatusText(moduleId, li);
+                // Auto-refresh cada 10 segundos
                 moduleRefreshIntervals[moduleId] = setInterval(() => {
-                    syncModuleStatus(moduleId, li);
-                }, 10000); // 10 segundos - menos agresivo
+                    syncModuleStatusText(moduleId, li);
+                }, 10000);
             }
         });
     });
 
-    // Sincronizar estado de módulo en lista - usa función centralizada
-    function syncModuleStatus(moduleId, moduleElement) {
-        // Delegar a la función centralizada desde module-status-sync.js
-        // El elemento es de tipo 'list-item' (elemento li en la lista de módulos)
-        ModuleStatusSync.syncModuleStatus(moduleId, moduleElement, 'list-item');
+    /**
+     * Sincroniza el texto de estado del módulo (sin cambiar colores)
+     * Los colores los controla CSS: .active { azul }, default { gris }
+     */
+    async function syncModuleStatusText(moduleId, listElement) {
+        try {
+            const response = await fetch(`/api/module/${moduleId}/analysis-status/`);
+            const data = await response.json();
+            
+            // Buscar o crear span de estado
+            let statusSpan = listElement.querySelector('.module-state-badge');
+            if (!statusSpan) {
+                statusSpan = document.createElement('span');
+                statusSpan.className = 'module-state-badge';
+                statusSpan.style.display = 'block';
+                statusSpan.style.fontSize = '0.8em';
+                statusSpan.style.opacity = '0.8';
+                statusSpan.style.marginTop = '2px';
+                listElement.appendChild(statusSpan);
+            }
+            
+            // Actualizar texto de estado sin tocar colores
+            if (data.is_analyzed) {
+                statusSpan.textContent = '✅ Vectores guardados';
+                statusSpan.style.color = '#28a745';
+            } else {
+                statusSpan.textContent = '⚫ Sin vectores';
+                statusSpan.style.color = '#6c757d';
+            }
+        } catch (error) {
+            console.error(`[CHAT] Error syncing status for module ${moduleId}:`, error);
+        }
     }
 
-    // Obtener token CSRF desde Django
-    function getCSRFToken() {
-        let token = document.querySelector('[name=csrfmiddlewaretoken]');
-        if (token) {
-            return token.value;
-        }
-        token = document.querySelector('meta[name="csrf-token"]');
-        if (token) {
-            return token.getAttribute('content');
-        }
-        return '';
-    }
-
-    // Seleccionar módulo
+    // ========== SELECCIÓN DE MÓDULO ==========
+    // Seleccionar/deseleccionar módulo (agrega/quita clase .active)
     function selectModule(element, moduleId) {
         currentModuleId = moduleId;
+        // Remover .active de todos
         document.querySelectorAll('.module-list li').forEach(li => {
             li.classList.remove('active');
         });
+        // Agregar .active al seleccionado (CSS lo pone azul)
         element.classList.add('active');
     }
 
+    // ========== UTILIDADES ==========
+    // Obtener token CSRF desde Django
+    function getCSRFToken() {
+        let token = document.querySelector('[name=csrfmiddlewaretoken]');
+        if (token) return token.value;
+        token = document.querySelector('meta[name="csrf-token"]');
+        if (token) return token.getAttribute('content');
+        return '';
+    }
+
+    // ========== CHAT ==========
     // Enviar pregunta
     function sendQuestion() {
         const question = document.getElementById('questionInput').value.trim();
@@ -284,7 +316,9 @@
         });
     }
 
-    // Agregar mensaje al chat
+    /**
+     * Agregar mensaje al chat
+     */
     function addMessageToChat(content, role) {
         const chatHistory = document.getElementById('chatHistory');
         const messageDiv = document.createElement('div');
@@ -309,14 +343,18 @@
         chatHistory.scrollTop = chatHistory.scrollHeight;
     }
 
-    // Escape HTML para evitar XSS
+    /**
+     * Escape HTML para evitar XSS
+     */
     function escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
     }
 
-    // Manejar Enter en el input
+    /**
+     * Manejar Enter en el input
+     */
     function handleKeyPress(event) {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
@@ -324,12 +362,16 @@
         }
     }
 
-    // Volver a la página anterior
+    /**
+     * Volver a la página anterior
+     */
     function goBack() {
         window.history.back();
     }
 
-    // Auto-scroll al cargar
+    /**
+     * Auto-scroll al cargar la página
+     */
     window.addEventListener('load', () => {
         const chatHistory = document.getElementById('chatHistory');
         chatHistory.scrollTop = chatHistory.scrollHeight;
