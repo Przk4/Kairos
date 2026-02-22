@@ -90,14 +90,14 @@
             
             {% if modules %}
                 <ul class="module-list">
-                    <li onclick="selectModule(null)" class="active">
+                    <li onclick="selectModule(this, null)" class="active">
                         🌍 Todos los módulos
                         {% if course.modules.count %}
                             <br><span style="font-size: 0.8em; opacity: 0.8;">({{ course.modules.count }} módulos)</span>
                         {% endif %}
                     </li>
                     {% for module in modules %}
-                        <li onclick="selectModule({{ module.id }})">
+                        <li onclick="selectModule(this, {{ module.id }})">
                             <strong>{{ module.name }}</strong>
                             {% with analysis=module.analysis %}
                                 {% if analysis.status == 'completed' %}
@@ -220,19 +220,12 @@
     }
 
     // Seleccionar módulo
-    function selectModule(moduleId) {
+    function selectModule(element, moduleId) {
         currentModuleId = moduleId;
-        
-        // Actualizar UI
         document.querySelectorAll('.module-list li').forEach(li => {
             li.classList.remove('active');
         });
-        
-        if (moduleId === null) {
-            document.querySelector('.module-list li').classList.add('active');
-        } else {
-            event.target.closest('li').classList.add('active');
-        }
+        element.classList.add('active');
     }
 
     // Enviar pregunta
