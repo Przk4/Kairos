@@ -6,8 +6,10 @@ import logging
 import warnings
 import time
 import pickle
+import re
 from pathlib import Path
 from typing import List, Optional
+import numpy as np
 import requests
 from django.conf import settings
 from sentence_transformers import SentenceTransformer
@@ -546,76 +548,101 @@ class RAGService:
         
         return chunks
     
-    def _chunk_text_semantic(self, text: str, similarity_threshold: float = 0.5, min_chunk_size: int = 100) -> List[str]:
+    def _chunk_text_semantic(self, text: str, max_chunk_size: int = 1500, similarity_threshold: float = 0.45) -> List[str]:
         """
-        Divide texto en chunks basado en cambios temáticos (SEMANTIC).
-        Detecta límites naturales cuando la similaridad entre oraciones cae.
+        Divide texto en chunks basándose en LÍMITES TEMÁTICOS.
+        
+        Algoritmo:
+        1. Dividir texto en oraciones
+        2. Calcular embedding de cada oración
+        3. Comparar similaridad coseno entre oraciones consecutivas
+        4. Donde la similaridad baja del threshold → cortar (cambio de tema)
+        5. Agrupar oraciones en chunks respetando max_chunk_size
         
         Args:
-            text: Texto a dividir
-            similarity_threshold: Si similaridad < threshold → nuevo chunk (0.0-1.0)
-            min_chunk_size: Tamaño mínimo de chunk en caracteres
+            text: Texto completo a dividir
+            max_chunk_size: Tamaño máximo de cada chunk en caracteres
+            similarity_threshold: Umbral de similaridad (menor = más chunks)
         
         Returns:
-            Lista de chunks semánticos
+            Lista de chunks semánticamente coherentes
         """
         if not text or not text.strip():
             return [text] if text else [""]
         
-        # Si el texto es pequeño, devolver completo
-        if len(text) < min_chunk_size * 2:
+        if len(text) <= max_chunk_size:
             return [text]
         
-        import re
-        import numpy as np
-        
-        # Dividir en oraciones (regex simple pero efectivo)
-        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+        # 1. Dividir en oraciones
+        sentences = re.split(r'(?<=[.!?\n])\s+', text.strip())
         sentences = [s.strip() for s in sentences if s.strip()]
         
         if len(sentences) <= 1:
-            return [text]
+            # Si no se puede dividir en oraciones, fallback a sliding window
+            logger.info("[SEMANTIC] Solo 1 oración, fallback a sliding window")
+            return self._chunk_text(text, chunk_size=1000, overlap=300)
         
+        logger.info(f"[SEMANTIC] {len(sentences)} oraciones detectadas")
+        
+        # 2. Calcular embeddings de cada oración
         try:
-            # Calcular embeddings para cada oración (BATCH = rápido)
-            logger.info(f"[SEMANTIC] Computing embeddings for {len(sentences)} sentences...")
-            embeddings = self.embedding_model.encode(sentences, show_progress_bar=False)
-            embeddings = np.array(embeddings)
-            
-            # Calcular similaridad coseno entre oraciones consecutivas
-            chunks = []
-            current_chunk = sentences[0]
-            
-            for i in range(1, len(sentences)):
-                # Similaridad coseno: dot(a,b) / (norm(a) * norm(b))
-                dot_product = np.dot(embeddings[i-1], embeddings[i])
-                norm_product = np.linalg.norm(embeddings[i-1]) * np.linalg.norm(embeddings[i])
-                similarity = dot_product / norm_product if norm_product > 0 else 0
-                
-                # Si similaridad BAJA → tema diferente → nuevo chunk
-                if similarity < similarity_threshold and len(current_chunk) >= min_chunk_size:
-                    chunks.append(current_chunk)
-                    current_chunk = sentences[i]
-                    logger.debug(f"  [SEMANTIC] New chunk (sim={similarity:.3f}): {sentences[i][:50]}...")
-                else:
-                    # Continuar acumulando en el mismo chunk
-                    current_chunk += " " + sentences[i]
-            
-            # Agregar último chunk
-            if current_chunk:
-                chunks.append(current_chunk)
-            
-            # Garantizar chunks válidos
-            if not chunks:
-                chunks = [text]
-            
-            logger.info(f"[SEMANTIC] ✅ {len(sentences)} sentences → {len(chunks)} semantic chunks")
-            return chunks
-            
+            sentence_embeddings = self.embedding_model.encode(sentences)
         except Exception as e:
-            logger.warning(f"[SEMANTIC] Error: {e}. Fallback a sliding window.")
-            # Fallback al método original si hay error
-            return self._chunk_text(text, chunk_size=1000, overlap=200)
+            logger.error(f"[SEMANTIC] Error encoding sentences: {e}, fallback a sliding window")
+            return self._chunk_text(text, chunk_size=1000, overlap=300)
+        
+        # 3. Calcular similaridad coseno entre oraciones consecutivas
+        similarities = []
+        for i in range(len(sentence_embeddings) - 1):
+            a = sentence_embeddings[i]
+            b = sentence_embeddings[i + 1]
+            # Cosine similarity
+            cos_sim = np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10)
+            similarities.append(float(cos_sim))
+        
+        # 4. Detectar puntos de corte (donde la similaridad baja del threshold)
+        breakpoints = []
+        for i, sim in enumerate(similarities):
+            if sim < similarity_threshold:
+                breakpoints.append(i + 1)  # Cortar DESPUÉS de la oración i
+        
+        logger.info(f"[SEMANTIC] Similaridades: min={min(similarities):.3f}, max={max(similarities):.3f}, avg={sum(similarities)/len(similarities):.3f}")
+        logger.info(f"[SEMANTIC] {len(breakpoints)} puntos de corte temático detectados (threshold={similarity_threshold})")
+        
+        # 5. Agrupar oraciones en chunks
+        chunks = []
+        current_chunk_sentences = []
+        current_length = 0
+        
+        for i, sentence in enumerate(sentences):
+            # Si agregar esta oración excede el máximo, guardar chunk actual
+            if current_length + len(sentence) > max_chunk_size and current_chunk_sentences:
+                chunks.append(' '.join(current_chunk_sentences))
+                current_chunk_sentences = []
+                current_length = 0
+            
+            current_chunk_sentences.append(sentence)
+            current_length += len(sentence) + 1  # +1 por el espacio
+            
+            # Si estamos en un punto de corte temático, guardar chunk
+            if i in breakpoints and current_chunk_sentences:
+                chunks.append(' '.join(current_chunk_sentences))
+                current_chunk_sentences = []
+                current_length = 0
+        
+        # No olvidar el último grupo de oraciones
+        if current_chunk_sentences:
+            chunks.append(' '.join(current_chunk_sentences))
+        
+        # Garantizar al menos 1 chunk
+        if not chunks:
+            chunks = [text]
+        
+        # Log de resultado
+        sizes = [len(c) for c in chunks]
+        logger.info(f"[SEMANTIC] Resultado: {len(chunks)} chunks, tamaños: {sizes}")
+        
+        return chunks
     
     def analyze_module(self, module, user_token: str) -> bool:
         """
@@ -691,17 +718,13 @@ class RAGService:
                         logger.error(f"  [VALIDATE] ❌ Document contains raw PDF binary - skipping!")
                         continue
                     
-                    # Si el contenido tiene texto extraído, usar SEMANTIC CHUNKING
-                    # Esto divide por cambios temáticos, no solo tamaño
+                    # Si el contenido tiene texto extraído, dividir en chunks SEMÁNTICOS
+                    # Cada chunk agrupa oraciones del mismo tema
                     if extracted:
-                        # ✨ SEMANTIC: Divide detectando cambios de tema
-                        chunks = self._chunk_text_semantic(
-                            text,
-                            similarity_threshold=0.45,
-                            min_chunk_size=150
-                        )
+                        # Usar chunking semántico: detecta límites temáticos
+                        chunks = self._chunk_text_semantic(text, max_chunk_size=1500, similarity_threshold=0.45)
                         
-                        logger.info(f"  [SEMANTIC] {len(text)} chars → {len(chunks)} semantic chunks")
+                        logger.info(f"  [CHUNKS] {len(text)} chars -> {len(chunks)} semantic chunks")
                         
                         # Crear embedding para cada chunk
                         for chunk_idx, chunk in enumerate(chunks):
