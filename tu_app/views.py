@@ -341,6 +341,36 @@ def analyze_module_api(request, module_id):
                 analysis.vector_db_path = f"module_{module.id}_course_{module.course.id}"
                 analysis.save()
                 
+                # GUARDAR EMBEDDINGS EN BD (ModuleEmbedding)
+                # El dashboard y chat.html leen de aquí
+                try:
+                    collection_name_db = f"module_{module.id}_course_{module.course.id}"
+                    # Obtener datos del in_memory_db o JSON
+                    embedding_data = {}
+                    if collection_name_db in rag_service.in_memory_db:
+                        embedding_data = rag_service.in_memory_db[collection_name_db]
+                    else:
+                        # Intentar leer del JSON guardado
+                        import os
+                        json_path = os.path.join(rag_service.json_embeddings_dir, f"{collection_name_db}.json")
+                        if os.path.exists(json_path):
+                            import json as json_lib
+                            with open(json_path, 'r', encoding='utf-8') as f:
+                                embedding_data = json_lib.load(f)
+                    
+                    doc_count = len(embedding_data.get('documents', []))
+                    module_embedding, created = ModuleEmbedding.objects.update_or_create(
+                        module=module,
+                        defaults={
+                            'embedding_data': embedding_data,
+                            'document_count': doc_count,
+                            'model_name': 'sentence-transformers/all-MiniLM-L6-v2',
+                        }
+                    )
+                    logger.info(f"✅ ModuleEmbedding saved for module {module.id}: {doc_count} documents ({'created' if created else 'updated'})")
+                except Exception as save_err:
+                    logger.error(f"⚠️ Error saving ModuleEmbedding for module {module.id}: {save_err}")
+                
                 logger.info(f"Module {module.id} analysis completed with {embeddings_count} embeddings for user {request.user.username}")
                 return JsonResponse({
                     'status': 'completed',
