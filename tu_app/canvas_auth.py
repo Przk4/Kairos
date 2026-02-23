@@ -134,17 +134,17 @@ def detect_user_role(user):
     Returns:
         str: 'student', 'teacher', o 'unknown'
     """
-    print(f"\n🔍 [ROLE DETECTION] Starting for user: {user.username}")
+    logger.info(f"[ROLE DETECTION] Starting for user: {user.username}")
     
     try:
         canvas_token = user.canvas_token
     except CanvasToken.DoesNotExist:
-        print(f"❌ [ROLE DETECTION] No Canvas token found")
+        logger.warning(f"[ROLE DETECTION] No Canvas token found for {user.username}")
         return 'unknown'
     
     access_token = get_valid_canvas_token(user)
     if not access_token:
-        print(f"❌ [ROLE DETECTION] No valid token")
+        logger.warning(f"[ROLE DETECTION] No valid token for {user.username}")
         return canvas_token.role
     
     # Obtenemos los cursos del usuario
@@ -165,22 +165,18 @@ def detect_user_role(user):
         is_teacher = False
         is_student = False
         
-        print(f"📚 [ROLE DETECTION] Found {len(courses)} courses")
+        logger.info(f"[ROLE DETECTION] Found {len(courses)} courses for {user.username}")
         
         for course in courses:
             enrollments = course.get('enrollments', [])
-            print(f"   📖 Course: {course.get('name')} - Enrollments: {len(enrollments)}")
             
             for enrollment in enrollments:
                 role = enrollment.get('role', '')
-                print(f"      👤 Role: {role}")
                 
                 if 'TeacherEnrollment' in role or 'Teacher' in role:
                     is_teacher = True
-                    print(f"      ✅ TEACHER DETECTED")
                 elif 'StudentEnrollment' in role or 'Student' in role:
                     is_student = True
-                    print(f"      ✅ STUDENT DETECTED")
         
         # Profesional: Teacher tiene prioridad sobre Student
         # Si un usuario es Teacher en CUALQUIER curso, es Teacher en Kairos
@@ -196,13 +192,11 @@ def detect_user_role(user):
         canvas_token.role = new_role
         canvas_token.save()
         
-        print(f"✅ [ROLE DETECTION] User {user.username} set to: {new_role}")
-        print(f"   is_teacher={is_teacher}, is_student={is_student}\n")
+        logger.info(f"[ROLE DETECTION] User {user.username} => {new_role} (teacher={is_teacher}, student={is_student})")
         return new_role
         
     except requests.exceptions.RequestException as e:
-        print(f"❌ [ROLE DETECTION] Error: {str(e)}")
-        logger.error(f"Error detecting user role: {str(e)}")
+        logger.error(f"[ROLE DETECTION] Error detecting role for {user.username}: {e}")
         return canvas_token.role
 
 

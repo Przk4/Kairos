@@ -2,13 +2,6 @@ from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
 
-# Choicesliterales para roles de usuario
-USER_ROLE_CHOICES = [
-    ('student', 'Estudiante'),
-    ('teacher', 'Maestro'),
-    ('admin', 'Administrador'),
-]
-
 
 class CanvasToken(models.Model):
     """
@@ -197,7 +190,7 @@ class StudentProfile(models.Model):
     Se usa para cruzar datos con la API de Canvas (enrollments).
     """
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='student_profile')
-    canvas_user_id = models.IntegerField(unique=True, db_index=True)
+    canvas_user_id = models.IntegerField(unique=True)  # unique=True creates index automatically
     display_name = models.CharField(max_length=255)
     email = models.EmailField(blank=True, default='')
     avatar_url = models.URLField(blank=True, null=True)
@@ -215,7 +208,6 @@ class StudentProfile(models.Model):
         verbose_name = "Student Profile"
         verbose_name_plural = "Student Profiles"
         indexes = [
-            models.Index(fields=['canvas_user_id']),
             models.Index(fields=['last_login_at']),
         ]
     

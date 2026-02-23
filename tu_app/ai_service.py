@@ -29,8 +29,6 @@ class DeepSeekAIService:
     ¡El resto del código no necesita cambios!
     """
     
-    SYSTEM_PROMPT = """Eres un tutor IA experto en educación."""
-    
     def __init__(self):
         """Inicializa el servicio usando el proveedor configurado"""
         # Instanciar el proveedor correcto basado en ACTIVE_PROVIDER
@@ -55,7 +53,7 @@ class DeepSeekAIService:
             self.provider = MockAIProvider()
         
         self.model = self.provider.model
-        logger.info(f"✅ DeepSeekAIService usando proveedor: {self.provider.__class__.__name__}")
+        logger.info(f"DeepSeekAIService using provider: {self.provider.__class__.__name__}")
     
     
     def answer_question(

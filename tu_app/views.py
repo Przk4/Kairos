@@ -2,10 +2,10 @@ from django.shortcuts import render, redirect
 from django.conf import settings
 from django.utils import timezone
 from django.contrib.auth.models import User
+from django.contrib.auth import login as auth_login, logout as auth_logout
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.contrib.auth.decorators import login_required
-from django.views.decorators.csrf import csrf_exempt
 from datetime import timedelta
 import requests
 import logging
@@ -23,14 +23,21 @@ from .canvas_auth import (
 )
 from .debug_service import get_debug_service
 from .rag_service import get_rag_service
+from .ai_service import get_ai_service
 
 logger = logging.getLogger(__name__)
 
 # Almacenamiento temporal del último flujo de prompt para debug
+# NOTA: Solo para desarrollo. En producción con múltiples workers,
+# usar Django cache framework (Redis/Memcached) en su lugar.
 _last_prompt_flow = {
     'question': None,
-    'embeddings': [],
+    'question_length': 0,
+    'retrieved_count': 0,
+    'retrieved_docs': [],
     'context': None,
+    'system_prompt': None,
+    'full_user_prompt': None,
     'response': None,
     'timestamp': None
 }
@@ -194,6 +201,14 @@ def canvas_callback(request):
         expires_at = timezone.now() + timedelta(seconds=expires_in)
         
         # Guardamos o actualizamos el token en BD
+        # No resetear role si ya fue detectado previamente
+        existing_role = 'unknown'
+        try:
+            existing_token = CanvasToken.objects.get(user=user)
+            existing_role = existing_token.role if existing_token.role != 'unknown' else 'unknown'
+        except CanvasToken.DoesNotExist:
+            pass
+        
         canvas_token, _ = CanvasToken.objects.update_or_create(
             user=user,
             defaults={
@@ -202,21 +217,19 @@ def canvas_callback(request):
                 'canvas_user_id': canvas_user_id,
                 'expires_at': expires_at,
                 'scopes': token_data.get('scope', ''),
-                'role': 'unknown',  # Se detectará más tarde
+                'role': existing_role,  # Preservar rol si ya fue detectado
             }
         )
         
-        # Autenticamos el usuario en Django
-        request.session['_auth_user_id'] = user.id
-        request.session['_auth_user_backend'] = 'django.contrib.auth.backends.ModelBackend'
-        request.session['_auth_user_hash'] = user.get_session_auth_hash()
+        # Autenticamos el usuario en Django (usando la función oficial)
+        user.backend = 'django.contrib.auth.backends.ModelBackend'
+        auth_login(request, user)
         
-        # Detectamos el rol automáticamente
+        # Detectamos el rol (siempre re-detectar para mantener actualizado)
         detected_role = detect_user_role(user)
         
         # TRACKING: Si es estudiante, crear/actualizar StudentProfile y registrar login
         if detected_role == 'student':
-            from .models import StudentProfile, LoginRecord
             profile, profile_created = StudentProfile.objects.get_or_create(
                 canvas_user_id=canvas_user_id,
                 defaults={
@@ -257,18 +270,15 @@ def canvas_logout(request):
     """
     Limpia la sesión del usuario.
     """
-    from django.contrib.auth import logout
-    logout(request)
+    auth_logout(request)
     return redirect('index')
 
 
+@login_required
 def module_detail(request, module_id):
     """
     Detalle de un módulo con opción de analizar para RAG.
     """
-    if not request.user.is_authenticated:
-        return redirect('canvas_login')
-    
     try:
         module = Module.objects.get(id=module_id, course__user=request.user)
         items = module.items.all()
@@ -285,17 +295,13 @@ def module_detail(request, module_id):
         })
 
 
+@login_required
 @require_http_methods(["POST"])
 def analyze_module_api(request, module_id):
     """
     API endpoint para iniciar análisis de un módulo.
     Primero sincroniza items si es necesario, luego analiza.
     """
-    # Verificar autenticación
-    if not request.user.is_authenticated:
-        logger.warning(f"Unauthorized access attempt to analyze_module_api from {request.META.get('REMOTE_ADDR', 'unknown')}")
-        return JsonResponse({'error': 'No autenticado - por favor inicia sesión primero'}, status=401)
-    
     from .canvas_auth import sync_module_items
     
     logger.info(f"Analyze request for module {module_id} from user {request.user.username}")
@@ -458,19 +464,13 @@ def chat_view(request, course_id):
         })
 
 
+@login_required
 @require_http_methods(["POST"])
 def chat_api(request):
     """
     API endpoint para manejar preguntas y respuestas de IA.
     POST: Envía una pregunta y recibe respuesta de DeepSeek con contexto RAG.
     """
-    # Verificar autenticación
-    if not request.user.is_authenticated:
-        return JsonResponse({'error': 'No autenticado'}, status=401)
-    
-    from .rag_service import get_rag_service
-    from .ai_service import get_ai_service
-    
     try:
         data = json.loads(request.body)
         
@@ -480,7 +480,6 @@ def chat_api(request):
         
         if not question:
             return JsonResponse({'error': 'Pregunta vacía'}, status=400)
-        
         
         # Verificamos que el usuario tenga acceso al curso
         course = Course.objects.get(id=course_id, user=request.user)
@@ -791,6 +790,7 @@ def api_teacher_course_students(request, course_id):
 # ENDPOINTS DE DEBUGGING - Para ver qué está pasando adentro del sistema
 # ============================================================================
 
+@login_required
 @require_http_methods(["GET"])
 def debug_events(request):
     """
@@ -819,6 +819,7 @@ def debug_events(request):
         return JsonResponse({'error': str(e)}, status=500)
 
 
+@login_required
 @require_http_methods(["GET"])
 def debug_stats(request):
     """
@@ -829,21 +830,21 @@ def debug_stats(request):
         debug_service = get_debug_service()
         stats = debug_service.get_stats()
         
-        # NUEVO: Obtener embeddings REALES de la BD en lugar de en-memoria
+        # Obtener embeddings REALES de la BD (query eficiente, sin N+1)
+        from django.db.models import Count, Q
+        embedding_stats = ModuleEmbedding.objects.aggregate(
+            total_modules=Count('id'),
+        )
+        
+        # Contar documentos: necesitamos iterar pero con una sola query
         total_embeddings = 0
         analyzed_modules = 0
-        
-        for module in Module.objects.all():
-            try:
-                embedding = ModuleEmbedding.objects.get(module=module)
-                docs = embedding.embedding_data.get('documents', []) if embedding.embedding_data else []
-                doc_count = len(docs)
-                
-                if doc_count > 0:
-                    total_embeddings += doc_count
-                    analyzed_modules += 1
-            except ModuleEmbedding.DoesNotExist:
-                pass
+        for emb in ModuleEmbedding.objects.only('embedding_data').iterator():
+            docs = emb.embedding_data.get('documents', []) if emb.embedding_data else []
+            doc_count = len(docs)
+            if doc_count > 0:
+                total_embeddings += doc_count
+                analyzed_modules += 1
         
         # Actualizar stats de RAG con datos REALES de BD
         stats['rag']['total_embeddings'] = total_embeddings
@@ -862,6 +863,7 @@ def debug_stats(request):
         return JsonResponse({'error': str(e)}, status=500)
 
 
+@login_required
 @require_http_methods(["GET"])
 def debug_documents(request):
     """
@@ -888,6 +890,7 @@ def debug_documents(request):
         return JsonResponse({'error': str(e)}, status=500)
 
 
+@login_required
 @require_http_methods(["GET"])
 def debug_rag_status(request):
     """
@@ -940,6 +943,7 @@ def debug_rag_status(request):
         return JsonResponse({'error': str(e)}, status=500)
 
 
+@login_required
 @require_http_methods(["GET"])
 def debug_prompt_flow(request):
     """
@@ -983,6 +987,7 @@ def debug_prompt_flow(request):
     })
 
 
+@login_required
 @require_http_methods(["POST"])
 def debug_question_embeddings(request):
     """
@@ -1123,13 +1128,13 @@ def test_button_click(request):
     })
 
 
+@login_required
 @require_http_methods(["GET"])
 def check_module_analysis_status(request, module_id):
     """
     Endpoint para verificar el estado de análisis de un módulo.
     
-    AHORA CHECKEA MODULEEMBEDDING EN BD en lugar de archivos locales.
-    Compatible con cloud (PostgreSQL en DigitalOcean sin archivos locales).
+    Checkea ModuleEmbedding en BD (compatible con cloud: PostgreSQL, Oracle).
     
     Respuesta:
     {
@@ -1141,7 +1146,7 @@ def check_module_analysis_status(request, module_id):
     """
     
     try:
-        module = Module.objects.get(id=module_id)
+        module = Module.objects.select_related('course').get(id=module_id)
         
         # Obtener estado de BD
         try:
@@ -1150,31 +1155,15 @@ def check_module_analysis_status(request, module_id):
         except ModuleAnalysis.DoesNotExist:
             db_status = 'not_analyzed'
         
-        # NUEVO: Checkear si existen embeddings en BD
+        # Checkear si existen embeddings en BD
         has_embeddings_in_db = False
         try:
             embedding = ModuleEmbedding.objects.get(module=module)
-            # Bug fix: len() debería contar documents, no dict keys
             docs = embedding.embedding_data.get('documents', []) if embedding.embedding_data else []
             has_embeddings_in_db = len(docs) > 0
         except ModuleEmbedding.DoesNotExist:
             has_embeddings_in_db = False
         
-        # FALLBACK: Si no hay en BD pero hay en filesystem, intentar cargar
-        # (Para transición gradual de archivos a BD)
-        if not has_embeddings_in_db:
-            import os, json
-            embeddings_file = f".embeddings/module_{module.id}_course_{module.course.id}.json"
-            if os.path.exists(embeddings_file):
-                try:
-                    with open(embeddings_file, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        has_embeddings_in_db = len(data.get('documents', [])) > 0
-                except:
-                    pass
-        
-        # Calcular is_analyzed: SOLO basado en si hay embeddings/vectores guardados
-        # No importa qué diga analysis_status - si no hay datos guardados, es "Analizar"
         is_analyzed = has_embeddings_in_db
         
         return JsonResponse({
@@ -1183,8 +1172,6 @@ def check_module_analysis_status(request, module_id):
             'is_analyzed': is_analyzed,
             'analysis_status': db_status,
             'items_count': module.items.count(),
-            'document_count': 0,
-            'embeddings_count': 0,
             'has_embeddings_in_db': has_embeddings_in_db
         })
     
@@ -1193,9 +1180,8 @@ def check_module_analysis_status(request, module_id):
             'status': 'ok',
             'module_id': module_id,
             'is_analyzed': False,
-            'document_count': 0,
-            'embeddings_count': 0,
             'items_count': 0,
+            'has_embeddings_in_db': False,
             'analysis_status': 'not_found'
         })
     except Exception as e:
@@ -1203,37 +1189,22 @@ def check_module_analysis_status(request, module_id):
         return JsonResponse({'error': str(e)}, status=500)
 
 
+@login_required
 @require_http_methods(["GET"])
 def get_all_modules_stats(request):
     """
     Endpoint para obtener el estado de TODOS los módulos y sus embeddings.
     Usado por: Dashboard, Botones, cualquier componente que necesite ver estado real.
-    
-    Respuesta:
-    {
-        'status': 'ok',
-        'total_modules': 6,
-        'total_embeddings': 35,
-        'modules': [
-            {
-                'id': 1,
-                'name': '6 semestre',
-                'embeddings_count': 25,
-                'has_embeddings': true,
-                'button_text': 'RE-ANALIZAR'
-            },
-            ...
-        ]
-    }
     """
     try:
-        modules = Module.objects.all()
+        # Query eficiente: prefetch embeddings en una sola query
+        modules = Module.objects.select_related('course').prefetch_related('embedding').all()
         total_embeddings = 0
         modules_data = []
         
         for module in modules:
             try:
-                embedding = ModuleEmbedding.objects.get(module=module)
+                embedding = module.embedding  # Ya está prefetched, no hay query extra
                 docs = embedding.embedding_data.get('documents', []) if embedding.embedding_data else []
                 doc_count = len(docs)
             except ModuleEmbedding.DoesNotExist:
@@ -1266,6 +1237,7 @@ def get_all_modules_stats(request):
         return JsonResponse({'error': str(e)}, status=500)
 
 
+@login_required
 def debug_test_data(request):
     """
     Endpoint para generar datos de prueba en el debug dashboard.
@@ -1319,6 +1291,7 @@ Las redes neuronales son modelos computacionales inspirados en el cerebro humano
     })
 
 
+@login_required
 def debug_dashboard(request):
     """
     Dashboard visual para ver qué está pasando en el sistema.
