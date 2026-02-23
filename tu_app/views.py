@@ -507,11 +507,22 @@ def chat_api(request):
             
             # GUARDAR FLUJO PARA DEBUG
             global _last_prompt_flow
+            
+            # Obtener system prompt para mostrarlo en dashboard
+            from tu_app.ai_service_config import DeepSeekProvider
+            system_prompt = DeepSeekProvider.SYSTEM_PROMPT
+            
+            # Construir el prompt completo tal cual se envía a DeepSeek
+            full_user_prompt = f"""Contexto del curso:\n{context_text}\n\nPregunta del estudiante:\n{question}\n\nPor favor, responde basándote en el contexto proporcionado."""
+            
             _last_prompt_flow = {
                 'question': question,
+                'question_length': len(question),
                 'retrieved_count': context_count,
                 'retrieved_docs': embeddings_info,
-                'context': context_text[:3000],  # Primeros 3000 caracteres
+                'context': context_text,  # SIN TRUNCAR - completo
+                'system_prompt': system_prompt,
+                'full_user_prompt': full_user_prompt,
                 'response': None,  # Se actualiza después
                 'timestamp': timezone.now().isoformat()
             }
@@ -756,6 +767,8 @@ def debug_prompt_flow(request):
         'retrieved_count': _last_prompt_flow.get('retrieved_count', 0),
         'retrieved_docs': _last_prompt_flow.get('retrieved_docs', []),
         'rag_context': _last_prompt_flow.get('context') or 'Sin contexto',
+        'system_prompt': _last_prompt_flow.get('system_prompt') or 'No disponible',
+        'full_user_prompt': _last_prompt_flow.get('full_user_prompt') or 'No disponible',
         'deepseek_response': _last_prompt_flow.get('response') or 'Sin respuesta registrada',
         'timestamp': _last_prompt_flow.get('timestamp') or '?'
     })

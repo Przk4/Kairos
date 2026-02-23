@@ -522,14 +522,26 @@
 
             <!-- Contexto para DeepSeek -->
             <div class="flow-section">
-                <div class="flow-title">📋 Contexto Completo Enviado a DeepSeek</div>
-                <div class="code-block" id="prompt-context">Esperando contexto...</div>
+                <div class="flow-title">📋 Contexto RAG (Chunks recuperados)</div>
+                <div class="code-block" id="prompt-context" style="max-height: 500px; overflow-y: auto;">Esperando contexto...</div>
+            </div>
+
+            <!-- System Prompt -->
+            <div class="flow-section">
+                <div class="flow-title">⚙️ System Prompt (Instrucciones al modelo)</div>
+                <div class="code-block" id="system-prompt" style="max-height: 300px; overflow-y: auto; border-left: 3px solid #FF9800;">Esperando...</div>
+            </div>
+
+            <!-- Prompt completo enviado -->
+            <div class="flow-section">
+                <div class="flow-title">📨 Prompt Completo Enviado a DeepSeek (User Message)</div>
+                <div class="code-block" id="full-user-prompt" style="max-height: 600px; overflow-y: auto; border-left: 3px solid #E91E63;">Esperando...</div>
             </div>
 
             <!-- Respuesta de DeepSeek -->
             <div class="flow-section">
-                <div class="flow-title">🤖 Respuesta de DeepSeek</div>
-                <div class="code-block" id="deepseek-response">Esperando respuesta...</div>
+                <div class="flow-title">🤖 Respuesta Completa de DeepSeek</div>
+                <div class="code-block" id="deepseek-response" style="max-height: 600px; overflow-y: auto;">Esperando respuesta...</div>
             </div>
 
             <button onclick="refreshPromptFlow()" style="width: 100%; margin-top: 10px;">🔄 Actualizar Flujo</button>
@@ -789,21 +801,19 @@
                     embeddingsList.parentElement.style.borderLeft = '4px solid #4CAF50';
                 }
                 
-                // Actualizar contexto completo (RAG_CONTEXT)
+                // Actualizar contexto completo (RAG_CONTEXT) - SIN TRUNCAR
                 const contextDiv = document.getElementById('prompt-context');
                 if (data.rag_context && data.rag_context.length > 0) {
                     const lines = data.rag_context.split('\n');
                     let contextHtml = '<div style="font-size: 11px; line-height: 1.6; color: #ddd;">';
-                    lines.slice(0, 40).forEach(line => {
+                    lines.forEach(line => {
                         if (line.startsWith('[Docs')) {
                             contextHtml += `<div style="color: #4CAF50; font-weight: bold; margin-top: 15px; margin-bottom: 5px;">${line}</div>`;
                         } else if (line.trim()) {
                             contextHtml += `<div style="margin-bottom: 3px;">${line}</div>`;
                         }
                     });
-                    if (lines.length > 40) {
-                        contextHtml += `<div style="color: #666; margin-top: 10px; text-align: center;">... [${lines.length - 40} líneas más] ...</div>`;
-                    }
+                    contextHtml += `<div style="color: #666; margin-top: 10px; font-size: 10px;">Total: ${data.rag_context.length} caracteres, ${lines.length} líneas</div>`;
                     contextHtml += '</div>';
                     contextDiv.innerHTML = contextHtml;
                     contextDiv.parentElement.style.borderLeft = '4px solid #2196F3';
@@ -812,12 +822,24 @@
                     contextDiv.parentElement.style.borderLeft = '4px solid #ff9800';
                 }
                 
-                // Actualizar respuesta DeepSeek
+                // Actualizar System Prompt
+                const systemPromptDiv = document.getElementById('system-prompt');
+                if (data.system_prompt) {
+                    systemPromptDiv.innerHTML = `<div style="font-size: 12px; line-height: 1.6; color: #FF9800; white-space: pre-wrap;">${data.system_prompt}</div>`;
+                    systemPromptDiv.parentElement.style.borderLeft = '4px solid #FF9800';
+                }
+                
+                // Actualizar Prompt Completo (User Message)
+                const fullPromptDiv = document.getElementById('full-user-prompt');
+                if (data.full_user_prompt) {
+                    fullPromptDiv.innerHTML = `<div style="font-size: 11px; line-height: 1.6; color: #E91E63; white-space: pre-wrap;">${data.full_user_prompt.length} caracteres total</div><hr style="border-color: #333; margin: 10px 0;"><div style="font-size: 11px; line-height: 1.6; color: #ddd; white-space: pre-wrap;">${data.full_user_prompt}</div>`;
+                    fullPromptDiv.parentElement.style.borderLeft = '4px solid #E91E63';
+                }
+                
+                // Actualizar respuesta DeepSeek - COMPLETA, sin truncar
                 const responseDiv = document.getElementById('deepseek-response');
                 if (data.deepseek_response) {
-                    responseDiv.textContent = data.deepseek_response.length > 1000 ? 
-                        data.deepseek_response.substring(0, 1000) + '\n\n... [Respuesta truncada] ...' : 
-                        data.deepseek_response;
+                    responseDiv.innerHTML = `<div style="font-size: 11px; line-height: 1.6; color: #CE93D8; white-space: pre-wrap;">${data.deepseek_response}</div>`;
                     responseDiv.parentElement.style.borderLeft = '4px solid #9C27B0';
                 } else {
                     responseDiv.textContent = 'Esperando respuesta...';
