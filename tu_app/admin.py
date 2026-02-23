@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import CanvasToken, Course, Module, ModuleItem, ModuleAnalysis, ChatMessage
+from .models import CanvasToken, Course, Module, ModuleItem, ModuleAnalysis, ChatMessage, StudentProfile, LoginRecord
 
 # Register your models here.
 
@@ -49,4 +49,20 @@ class ChatMessageAdmin(admin.ModelAdmin):
     list_filter = ('role', 'model_used', 'created_at')
     search_fields = ('user__username', 'course__name', 'content')
     readonly_fields = ('created_at', 'tokens_used', 'processing_time')
+
+
+@admin.register(StudentProfile)
+class StudentProfileAdmin(admin.ModelAdmin):
+    list_display = ('display_name', 'canvas_user_id', 'email', 'total_logins', 'last_login_at', 'first_login_at')
+    list_filter = ('last_login_at', 'first_login_at')
+    search_fields = ('display_name', 'email', 'canvas_user_id')
+    readonly_fields = ('first_login_at', 'last_login_at', 'canvas_user_id')
+
+
+@admin.register(LoginRecord)
+class LoginRecordAdmin(admin.ModelAdmin):
+    list_display = ('student_profile', 'timestamp', 'ip_address')
+    list_filter = ('timestamp',)
+    search_fields = ('student_profile__display_name',)
+    readonly_fields = ('timestamp',)
 

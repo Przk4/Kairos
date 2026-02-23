@@ -12,7 +12,7 @@ import logging
 import secrets
 import json
 import time
-from .models import CanvasToken, Course, Module, ModuleAnalysis, ModuleEmbedding, ChatMessage
+from .models import CanvasToken, Course, Module, ModuleAnalysis, ModuleEmbedding, ChatMessage, StudentProfile, LoginRecord
 from .canvas_auth import (
     get_valid_canvas_token, 
     refresh_canvas_token, 
@@ -212,9 +212,35 @@ def canvas_callback(request):
         request.session['_auth_user_hash'] = user.get_session_auth_hash()
         
         # Detectamos el rol automáticamente
-        detect_user_role(user)
+        detected_role = detect_user_role(user)
         
-        logger.info(f"User {user.username} authenticated successfully with Canvas token")
+        # TRACKING: Si es estudiante, crear/actualizar StudentProfile y registrar login
+        if detected_role == 'student':
+            from .models import StudentProfile, LoginRecord
+            profile, profile_created = StudentProfile.objects.get_or_create(
+                canvas_user_id=canvas_user_id,
+                defaults={
+                    'user': user,
+                    'display_name': token_data['user'].get('name', user.username),
+                    'email': token_data['user'].get('email', ''),
+                }
+            )
+            if not profile_created:
+                # Actualizar datos en cada login
+                profile.total_logins += 1
+                profile.last_login_at = timezone.now()
+                profile.display_name = token_data['user'].get('name', profile.display_name)
+                profile.save()
+            
+            # Registrar evento de login individual
+            LoginRecord.objects.create(
+                student_profile=profile,
+                ip_address=request.META.get('REMOTE_ADDR'),
+                user_agent=request.META.get('HTTP_USER_AGENT', '')[:500],
+            )
+            logger.info(f"StudentProfile {'created' if profile_created else 'updated'} for {user.username} (login #{profile.total_logins})")
+        
+        logger.info(f"User {user.username} authenticated successfully with Canvas token (role: {detected_role})")
         
         return redirect('index')
 
@@ -575,6 +601,189 @@ def chat_api(request):
         return JsonResponse({'error': 'JSON inválido'}, status=400)
     except Exception as e:
         logger.error(f"Error in chat_api for user {request.user.username}: {str(e)}")
+        return JsonResponse({'error': f'Error: {str(e)}'}, status=500)
+
+
+# ============================================================================
+# VISTAS DE PROFESORES — Panel de cursos y lista de alumnos
+# ============================================================================
+
+@login_required
+def teacher_course_detail(request, course_id):
+    """
+    Vista detallada de un curso para el profesor.
+    Muestra la lista de alumnos inscritos en Canvas, marcando en verde
+    los que ya iniciaron sesión en Kairos.
+    
+    Flujo:
+    1. Verificar que el usuario es profesor
+    2. Obtener lista de enrollments del curso via Canvas API
+    3. Cruzar canvas_user_id con StudentProfile de Kairos
+    4. Renderizar template con data combinada
+    """
+    try:
+        canvas_token = request.user.canvas_token
+        
+        if not canvas_token.is_teacher():
+            return render(request, 'tu_app/error.html', {
+                'error': 'Acceso restringido a profesores.'
+            })
+        
+        # Obtener el curso del profesor
+        course = Course.objects.get(id=course_id, user=request.user)
+        
+        return render(request, 'tu_app/teacher_course_detail.html', {
+            'course': course,
+            'user': request.user,
+        })
+        
+    except CanvasToken.DoesNotExist:
+        return render(request, 'tu_app/error.html', {
+            'error': 'No se encontró token de Canvas.'
+        })
+    except Course.DoesNotExist:
+        return render(request, 'tu_app/error.html', {
+            'error': 'Curso no encontrado.'
+        })
+
+
+@login_required
+@require_http_methods(["GET"])
+def api_teacher_course_students(request, course_id):
+    """
+    API endpoint: Obtiene la lista de estudiantes de un curso.
+    
+    Arquitectura:
+    - Fuente primaria: Canvas API /courses/{id}/enrollments (source of truth)
+    - Enriquecimiento: Cruza con StudentProfile de Kairos para estado de login
+    
+    Esto es correcto para producción porque:
+    - Canvas es la fuente de verdad para inscripciones (no duplicamos datos)
+    - Kairos solo trackea SU propia data (logins, actividad)
+    - Si Canvas cambia inscripciones, se refleja automáticamente
+    
+    Respuesta:
+    {
+        'students': [
+            {
+                'canvas_user_id': 12345,
+                'name': 'Juan Pérez',
+                'email': 'juan@example.com',
+                'has_kairos_session': True,    # ¿Ha iniciado sesión en Kairos?
+                'total_logins': 15,            # Total de logins en Kairos
+                'logins_this_week': 3,         # Logins esta semana
+                'first_login': '2026-01-15',   # Primer login
+                'last_login': '2026-02-23',    # Último login
+            },
+            ...
+        ],
+        'total_students': 30,
+        'students_in_kairos': 18
+    }
+    """
+    try:
+        canvas_token = request.user.canvas_token
+        
+        if not canvas_token.is_teacher():
+            return JsonResponse({'error': 'Acceso restringido a profesores'}, status=403)
+        
+        course = Course.objects.get(id=course_id, user=request.user)
+        
+        # Obtener token válido de Canvas
+        from .canvas_auth import get_valid_canvas_token
+        access_token = get_valid_canvas_token(request.user)
+        if not access_token:
+            return JsonResponse({'error': 'Token de Canvas expirado'}, status=401)
+        
+        # Consultar Canvas API para obtener inscripciones de estudiantes
+        headers = {'Authorization': f'Bearer {access_token}'}
+        enrollments_url = f"{settings.CANVAS_BASE_URL}/api/v1/courses/{course.canvas_course_id}/enrollments"
+        
+        all_enrollments = []
+        page = 1
+        
+        # Paginación de Canvas API (puede haber muchos estudiantes)
+        while True:
+            response = requests.get(
+                enrollments_url,
+                headers=headers,
+                params={
+                    'type[]': 'StudentEnrollment',
+                    'state[]': 'active',
+                    'per_page': 100,
+                    'page': page,
+                }
+            )
+            response.raise_for_status()
+            
+            page_data = response.json()
+            if not page_data:
+                break
+            
+            all_enrollments.extend(page_data)
+            
+            # Revisar si hay más páginas (Canvas usa Link header)
+            link_header = response.headers.get('Link', '')
+            if 'rel="next"' not in link_header:
+                break
+            page += 1
+        
+        # Obtener todos los StudentProfiles en UNA query (eficiente para producción)
+        canvas_ids = [e.get('user_id') for e in all_enrollments if e.get('user_id')]
+        existing_profiles = {
+            p.canvas_user_id: p 
+            for p in StudentProfile.objects.filter(canvas_user_id__in=canvas_ids)
+        }
+        
+        # Construir respuesta enriquecida
+        students = []
+        students_in_kairos = 0
+        
+        for enrollment in all_enrollments:
+            user_data = enrollment.get('user', {})
+            canvas_uid = enrollment.get('user_id') or user_data.get('id')
+            
+            if not canvas_uid:
+                continue
+            
+            profile = existing_profiles.get(canvas_uid)
+            has_session = profile is not None
+            
+            if has_session:
+                students_in_kairos += 1
+            
+            students.append({
+                'canvas_user_id': canvas_uid,
+                'name': user_data.get('name', user_data.get('sortable_name', 'Sin nombre')),
+                'email': user_data.get('email', user_data.get('login_id', '')),
+                'avatar_url': user_data.get('avatar_url', ''),
+                'has_kairos_session': has_session,
+                'total_logins': profile.total_logins if has_session else 0,
+                'logins_this_week': profile.logins_this_week() if has_session else 0,
+                'first_login': profile.first_login_at.strftime('%Y-%m-%d %H:%M') if has_session else None,
+                'last_login': profile.last_login_at.strftime('%Y-%m-%d %H:%M') if has_session else None,
+            })
+        
+        # Ordenar: primero los que tienen sesión en Kairos, luego por nombre
+        students.sort(key=lambda s: (not s['has_kairos_session'], s['name'].lower()))
+        
+        return JsonResponse({
+            'status': 'ok',
+            'course_name': course.name,
+            'students': students,
+            'total_students': len(students),
+            'students_in_kairos': students_in_kairos,
+        })
+        
+    except CanvasToken.DoesNotExist:
+        return JsonResponse({'error': 'Token de Canvas no encontrado'}, status=401)
+    except Course.DoesNotExist:
+        return JsonResponse({'error': 'Curso no encontrado'}, status=404)
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching Canvas enrollments for course {course_id}: {e}")
+        return JsonResponse({'error': f'Error de conexión con Canvas: {str(e)}'}, status=502)
+    except Exception as e:
+        logger.error(f"Error in api_teacher_course_students: {e}", exc_info=True)
         return JsonResponse({'error': f'Error: {str(e)}'}, status=500)
 
 

@@ -182,11 +182,13 @@ def detect_user_role(user):
                     is_student = True
                     print(f"      ✅ STUDENT DETECTED")
         
-        # Priorizamos estudiante sobre maestro si tiene ambos roles
-        if is_student:
-            new_role = 'student'
-        elif is_teacher:
+        # Profesional: Teacher tiene prioridad sobre Student
+        # Si un usuario es Teacher en CUALQUIER curso, es Teacher en Kairos
+        # (puede ser TA/estudiante en otros cursos pero su rol principal es docente)
+        if is_teacher:
             new_role = 'teacher'
+        elif is_student:
+            new_role = 'student'
         else:
             new_role = 'unknown'
         

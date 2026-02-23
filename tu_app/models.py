@@ -184,6 +184,89 @@ class ModuleEmbedding(models.Model):
         verbose_name_plural = "Module Embeddings"
 
 
+class StudentProfile(models.Model):
+    """
+    Perfil de cada estudiante que ha iniciado sesión en Kairos.
+    Se crea automáticamente en el primer login.
+    
+    Arquitectura: Un registro por estudiante. Compatible con
+    PostgreSQL (Oracle/DigitalOcean), MySQL, SQLite.
+    
+    El canvas_user_id es el identificador UNIVERSAL del estudiante
+    en Canvas LMS — es el mismo ID independientemente del curso.
+    Se usa para cruzar datos con la API de Canvas (enrollments).
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='student_profile')
+    canvas_user_id = models.IntegerField(unique=True, db_index=True)
+    display_name = models.CharField(max_length=255)
+    email = models.EmailField(blank=True, default='')
+    avatar_url = models.URLField(blank=True, null=True)
+    
+    # Login tracking
+    first_login_at = models.DateTimeField(auto_now_add=True)
+    last_login_at = models.DateTimeField(default=timezone.now)
+    total_logins = models.PositiveIntegerField(default=1)
+    
+    # Activity tracking (se actualiza desde otros módulos)
+    total_questions_asked = models.PositiveIntegerField(default=0)
+    total_modules_studied = models.PositiveIntegerField(default=0)
+    
+    class Meta:
+        verbose_name = "Student Profile"
+        verbose_name_plural = "Student Profiles"
+        indexes = [
+            models.Index(fields=['canvas_user_id']),
+            models.Index(fields=['last_login_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.display_name} (Canvas #{self.canvas_user_id})"
+    
+    def logins_this_week(self):
+        """Cuenta logins de la semana actual (lunes a domingo)."""
+        from datetime import timedelta
+        now = timezone.now()
+        # Inicio de la semana (lunes)
+        week_start = (now - timedelta(days=now.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        return self.login_records.filter(timestamp__gte=week_start).count()
+
+
+class LoginRecord(models.Model):
+    """
+    Registro individual de cada inicio de sesión en Kairos.
+    
+    Arquitectura para producción:
+    - Index compuesto (student_profile, timestamp) para queries por rango de fecha O(log n)
+    - Particionable por mes en PostgreSQL para deployments con millones de usuarios
+    - Registros viejos pueden archivarse sin afectar queries recientes
+    
+    Se usa para:
+    - Calcular "veces esta semana" (WHERE timestamp >= week_start)
+    - Analítica de uso por profesor
+    - Auditoría de acceso
+    """
+    student_profile = models.ForeignKey(
+        StudentProfile, on_delete=models.CASCADE, related_name='login_records'
+    )
+    timestamp = models.DateTimeField(auto_now_add=True)
+    ip_address = models.GenericIPAddressField(blank=True, null=True)
+    user_agent = models.CharField(max_length=500, blank=True, default='')
+    
+    class Meta:
+        verbose_name = "Login Record"
+        verbose_name_plural = "Login Records"
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['student_profile', '-timestamp']),
+            models.Index(fields=['-timestamp']),
+        ]
+    
+    def __str__(self):
+        return f"{self.student_profile.display_name} - {self.timestamp.strftime('%Y-%m-%d %H:%M')}"
+
+
 class ChatMessage(models.Model):
     """
     Modelo para almacenar conversaciones entre estudiantes e IA.

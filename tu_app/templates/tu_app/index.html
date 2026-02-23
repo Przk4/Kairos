@@ -130,14 +130,19 @@
             <!-- Mostrar para MAESTROS -->
             {% elif is_teacher %}
                 <h2>👨‍🏫 Panel de Maestro</h2>
+                <p style="color: #6c757d; margin-bottom: 20px;">
+                    Selecciona un curso para ver la lista de alumnos y su actividad en Kairos.
+                </p>
                 {% if courses %}
                     <div class="courses-grid">
                         {% for course in courses %}
-                            <div class="course-card">
+                            <a href="{% url 'teacher_course_detail' course.id %}" class="course-card" style="text-decoration: none; color: inherit;">
                                 <h3>{{ course.name }}</h3>
                                 <p class="course-code">{{ course.code }}</p>
-                                <p style="font-size: 0.9em; color: #6c757d; margin-top: 10px;">Función de maestro próximamente</p>
-                            </div>
+                                <p style="font-size: 0.9em; color: #007bff; margin-top: 10px; font-weight: 500;">
+                                    👥 Ver alumnos →
+                                </p>
+                            </a>
                         {% endfor %}
                     </div>
                 {% else %}

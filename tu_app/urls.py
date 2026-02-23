@@ -14,6 +14,10 @@ urlpatterns = [
     path('course/<int:course_id>/chat/', views.chat_view, name='chat'),
     path('api/chat/', views.chat_api, name='chat_api'),
     
+    # Teacher routes
+    path('teacher/course/<int:course_id>/', views.teacher_course_detail, name='teacher_course_detail'),
+    path('api/teacher/course/<int:course_id>/students/', views.api_teacher_course_students, name='api_teacher_course_students'),
+    
     # NEW: Module stats endpoint for dashboard
     path('api/modules/stats-all/', views.get_all_modules_stats, name='get_all_modules_stats'),
     
