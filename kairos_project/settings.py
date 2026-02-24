@@ -11,33 +11,50 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
-import os # Importar el módulo os para las variables de entorno
-from dotenv import load_dotenv  # Load environment variables from .env
+import os
+from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv(Path(__file__).resolve().parent.parent / '.env')
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
-
-# SECURITY WARNING: Cargar la SECRET_KEY desde una variable de entorno.
+# =================================================
+# == CORE SETTINGS                               ==
+# =================================================
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
+DEBUG = os.getenv('DJANGO_DEBUG', 'False') == 'True'
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DJANGO_DEBUG', 'True') == 'True'
+# Hosts: siempre incluye localhost para dev, agrega tu dominio Oracle via env
+ALLOWED_HOSTS = ['127.0.0.1', 'localhost']
 
-ALLOWED_HOSTS = [
-    '127.0.0.1',
-    '172.23.1.18',
-    'localhost',
-]
+# Agregar hosts extra desde .env (separados por coma)
+# Ejemplo: ALLOWED_HOSTS_EXTRA=kairos.example.com,150.136.xx.xx
+for host in os.getenv('ALLOWED_HOSTS_EXTRA', '').split(','):
+    host = host.strip()
+    if host:
+        ALLOWED_HOSTS.append(host)
+
 NGROK_HOSTNAME = os.getenv('NGROK_HOSTNAME')
 if NGROK_HOSTNAME:
     ALLOWED_HOSTS.append(NGROK_HOSTNAME)
+
+# CSRF: en producción, necesitas declarar los orígenes confiables
+CSRF_TRUSTED_ORIGINS = []
+for origin in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(','):
+    origin = origin.strip()
+    if origin:
+        CSRF_TRUSTED_ORIGINS.append(origin)
+if NGROK_HOSTNAME:
+    CSRF_TRUSTED_ORIGINS.append(f'https://{NGROK_HOSTNAME}')
+
+# Security headers para producción
+if not DEBUG:
+    SECURE_BROWSER_XSS_FILTER = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    X_FRAME_OPTIONS = 'DENY'
 
 
 # Application definition
@@ -54,6 +71,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',  # Serve static files in production
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -83,15 +101,27 @@ TEMPLATES = [
 WSGI_APPLICATION = 'kairos_project.wsgi.application'
 
 
-# Database
-# https://docs.djangoproject.com/en/5.2/ref/settings/#databases
+# =================================================
+# == DATABASE                                    ==
+# =================================================
+# En producción usa PostgreSQL via DATABASE_URL
+# Formato: postgres://USER:PASSWORD@HOST:PORT/DBNAME
+# En desarrollo usa SQLite si DATABASE_URL no está configurada
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+DATABASE_URL = os.getenv('DATABASE_URL')
+
+if DATABASE_URL:
+    import dj_database_url
+    DATABASES = {
+        'default': dj_database_url.parse(DATABASE_URL, conn_max_age=600)
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 
 # Password validation
@@ -129,6 +159,8 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
