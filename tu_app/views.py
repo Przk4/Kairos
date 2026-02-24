@@ -787,6 +787,258 @@ def api_teacher_course_students(request, course_id):
 
 
 # ============================================================================
+# TEACHER AI — Generador de tareas con IA
+# ============================================================================
+
+@login_required
+@require_http_methods(["POST"])
+def api_teacher_ai_generate(request, course_id):
+    """
+    API: El profesor describe la tarea → DeepSeek genera la propuesta.
+    
+    POST body (JSON):
+        { "prompt": "simple, tres ejercicios, con razonamiento crítico" }
+    
+    Response:
+        {
+            "description": "...texto generado por IA...",
+            "tokens_used": 450,
+            "processing_time": 2.3,
+            "model": "deepseek-chat"
+        }
+    """
+    try:
+        canvas_token = request.user.canvas_token
+        if not canvas_token.is_teacher():
+            return JsonResponse({'error': 'Acceso restringido a profesores'}, status=403)
+
+        course = Course.objects.get(id=course_id, user=request.user)
+
+        body = json.loads(request.body)
+        prompt = body.get('prompt', '').strip()
+        if not prompt:
+            return JsonResponse({'error': 'El campo "prompt" es obligatorio'}, status=400)
+
+        from .teacher_ai_service import get_teacher_ai_service
+        ai = get_teacher_ai_service()
+        result = ai.generate_assignment(
+            teacher_prompt=prompt,
+            course_name=course.name,
+        )
+
+        return JsonResponse({
+            'status': 'ok',
+            'description': result['description'],
+            'tokens_used': result['tokens_used'],
+            'processing_time': round(result['processing_time'], 2),
+            'model': result['model'],
+        })
+
+    except CanvasToken.DoesNotExist:
+        return JsonResponse({'error': 'Token de Canvas no encontrado'}, status=401)
+    except Course.DoesNotExist:
+        return JsonResponse({'error': 'Curso no encontrado'}, status=404)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'JSON inválido'}, status=400)
+    except Exception as e:
+        logger.error(f"Error in api_teacher_ai_generate: {e}", exc_info=True)
+        return JsonResponse({'error': f'Error: {str(e)}'}, status=500)
+
+
+@login_required
+@require_http_methods(["POST"])
+def api_teacher_create_assignment(request, course_id):
+    """
+    API: Crea una tarea en Canvas vía Canvas API.
+    
+    POST body (JSON):
+        {
+            "name": "Tarea 1: Pensamiento Crítico",
+            "description": "<p>Instrucciones...</p>",
+            "due_at": "2026-03-15T23:59:00Z",    // ISO 8601 (opcional)
+            "points_possible": 100,                // (opcional, default 0)
+            "submission_types": ["online_text_entry", "online_upload"],  // (opcional)
+            "assignment_group_id": 12345,          // (opcional)
+            "published": false                     // (opcional, default false)
+        }
+    
+    Canvas submission_types válidos:
+        online_text_entry, online_upload, online_url, media_recording, none
+    
+    Response:
+        { "status": "ok", "assignment": { ...canvas assignment object... } }
+    """
+    try:
+        canvas_token = request.user.canvas_token
+        if not canvas_token.is_teacher():
+            return JsonResponse({'error': 'Acceso restringido a profesores'}, status=403)
+
+        course = Course.objects.get(id=course_id, user=request.user)
+
+        body = json.loads(request.body)
+        name = body.get('name', '').strip()
+        if not name:
+            return JsonResponse({'error': 'El nombre de la tarea es obligatorio'}, status=400)
+
+        # Construir payload para Canvas API
+        assignment_data = {
+            'assignment[name]': name,
+            'assignment[description]': body.get('description', ''),
+            'assignment[published]': 'true' if body.get('published', False) else 'false',
+        }
+
+        # Campos opcionales
+        if body.get('due_at'):
+            assignment_data['assignment[due_at]'] = body['due_at']
+        if body.get('lock_at'):
+            assignment_data['assignment[lock_at]'] = body['lock_at']
+        if body.get('unlock_at'):
+            assignment_data['assignment[unlock_at]'] = body['unlock_at']
+
+        points = body.get('points_possible')
+        if points is not None:
+            assignment_data['assignment[points_possible]'] = str(points)
+
+        submission_types = body.get('submission_types', ['online_text_entry'])
+        for st in submission_types:
+            assignment_data.setdefault('assignment[submission_types][]', [])
+        # Canvas expects repeated keys for arrays
+        submission_list = body.get('submission_types', ['online_text_entry'])
+
+        if body.get('assignment_group_id'):
+            assignment_data['assignment[assignment_group_id]'] = str(body['assignment_group_id'])
+
+        # Obtener token válido de Canvas
+        from .canvas_auth import get_valid_canvas_token
+        access_token = get_valid_canvas_token(request.user)
+        if not access_token:
+            return JsonResponse({'error': 'Token de Canvas expirado'}, status=401)
+
+        headers = {'Authorization': f'Bearer {access_token}'}
+        canvas_url = f"{settings.CANVAS_BASE_URL}/api/v1/courses/{course.canvas_course_id}/assignments"
+
+        # Canvas API expects form-encoded data for arrays, build properly
+        payload = {
+            'assignment[name]': name,
+            'assignment[description]': body.get('description', ''),
+            'assignment[published]': body.get('published', False),
+        }
+        if body.get('due_at'):
+            payload['assignment[due_at]'] = body['due_at']
+        if body.get('lock_at'):
+            payload['assignment[lock_at]'] = body['lock_at']
+        if body.get('unlock_at'):
+            payload['assignment[unlock_at]'] = body['unlock_at']
+        if points is not None:
+            payload['assignment[points_possible]'] = points
+        if body.get('assignment_group_id'):
+            payload['assignment[assignment_group_id]'] = body['assignment_group_id']
+
+        # submission_types needs special handling (array parameter)
+        response = requests.post(
+            canvas_url,
+            headers=headers,
+            data={
+                **{k: v for k, v in payload.items()},
+                'assignment[submission_types][]': submission_list,
+            },
+        )
+        response.raise_for_status()
+
+        canvas_assignment = response.json()
+
+        logger.info(
+            f"Teacher {request.user.username} created assignment "
+            f"'{name}' in course {course.canvas_course_id} "
+            f"(Canvas ID: {canvas_assignment.get('id')})"
+        )
+
+        return JsonResponse({
+            'status': 'ok',
+            'assignment': {
+                'id': canvas_assignment.get('id'),
+                'name': canvas_assignment.get('name'),
+                'html_url': canvas_assignment.get('html_url'),
+                'due_at': canvas_assignment.get('due_at'),
+                'points_possible': canvas_assignment.get('points_possible'),
+                'published': canvas_assignment.get('published'),
+            }
+        })
+
+    except CanvasToken.DoesNotExist:
+        return JsonResponse({'error': 'Token de Canvas no encontrado'}, status=401)
+    except Course.DoesNotExist:
+        return JsonResponse({'error': 'Curso no encontrado'}, status=404)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'JSON inválido'}, status=400)
+    except requests.exceptions.HTTPError as e:
+        error_body = ''
+        if e.response is not None:
+            try:
+                error_body = e.response.json()
+            except Exception:
+                error_body = e.response.text[:500]
+        logger.error(f"Canvas API error creating assignment: {e} — {error_body}")
+        return JsonResponse({
+            'error': f'Error de Canvas al crear tarea',
+            'canvas_error': str(error_body),
+        }, status=e.response.status_code if e.response is not None else 502)
+    except Exception as e:
+        logger.error(f"Error in api_teacher_create_assignment: {e}", exc_info=True)
+        return JsonResponse({'error': f'Error: {str(e)}'}, status=500)
+
+
+@login_required
+@require_http_methods(["GET"])
+def api_teacher_assignment_groups(request, course_id):
+    """
+    API: Obtiene los grupos de tareas del curso desde Canvas.
+    El profesor los necesita para elegir en qué grupo publicar la tarea.
+    
+    Response:
+        {
+            "groups": [
+                { "id": 123, "name": "Tareas", "position": 1 },
+                { "id": 456, "name": "Exámenes", "position": 2 }
+            ]
+        }
+    """
+    try:
+        canvas_token = request.user.canvas_token
+        if not canvas_token.is_teacher():
+            return JsonResponse({'error': 'Acceso restringido a profesores'}, status=403)
+
+        course = Course.objects.get(id=course_id, user=request.user)
+
+        from .canvas_auth import get_valid_canvas_token
+        access_token = get_valid_canvas_token(request.user)
+        if not access_token:
+            return JsonResponse({'error': 'Token de Canvas expirado'}, status=401)
+
+        headers = {'Authorization': f'Bearer {access_token}'}
+        url = f"{settings.CANVAS_BASE_URL}/api/v1/courses/{course.canvas_course_id}/assignment_groups"
+
+        resp = requests.get(url, headers=headers, params={'per_page': 100})
+        resp.raise_for_status()
+
+        groups = [
+            {'id': g['id'], 'name': g['name'], 'position': g.get('position', 0)}
+            for g in resp.json()
+        ]
+        groups.sort(key=lambda g: g['position'])
+
+        return JsonResponse({'status': 'ok', 'groups': groups})
+
+    except CanvasToken.DoesNotExist:
+        return JsonResponse({'error': 'Token de Canvas no encontrado'}, status=401)
+    except Course.DoesNotExist:
+        return JsonResponse({'error': 'Curso no encontrado'}, status=404)
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching assignment groups: {e}")
+        return JsonResponse({'error': f'Error de Canvas: {str(e)}'}, status=502)
+
+
+# ============================================================================
 # ENDPOINTS DE DEBUGGING - Para ver qué está pasando adentro del sistema
 # ============================================================================
 

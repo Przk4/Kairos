@@ -17,6 +17,9 @@ urlpatterns = [
     # Teacher routes
     path('teacher/course/<int:course_id>/', views.teacher_course_detail, name='teacher_course_detail'),
     path('api/teacher/course/<int:course_id>/students/', views.api_teacher_course_students, name='api_teacher_course_students'),
+    path('api/teacher/course/<int:course_id>/ai-generate/', views.api_teacher_ai_generate, name='api_teacher_ai_generate'),
+    path('api/teacher/course/<int:course_id>/create-assignment/', views.api_teacher_create_assignment, name='api_teacher_create_assignment'),
+    path('api/teacher/course/<int:course_id>/assignment-groups/', views.api_teacher_assignment_groups, name='api_teacher_assignment_groups'),
     
     # NEW: Module stats endpoint for dashboard
     path('api/modules/stats-all/', views.get_all_modules_stats, name='get_all_modules_stats'),

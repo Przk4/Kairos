@@ -29,7 +29,7 @@
             display: flex; 
             justify-content: space-between; 
             align-items: center; 
-            margin-bottom: 25px; 
+            margin-bottom: 20px; 
             border-bottom: 2px solid #ffc107; 
             padding-bottom: 15px; 
         }
@@ -48,9 +48,228 @@
         }
         .btn:hover { opacity: 0.85; }
         .btn-back { background: #6c757d; color: #fff; }
-        .btn-refresh { background: #007bff; color: #fff; }
+        .btn-primary { background: #007bff; color: #fff; }
+        .btn-success { background: #28a745; color: #fff; }
+        .btn-warning { background: #ffc107; color: #333; }
+        .btn-danger { background: #dc3545; color: #fff; }
+        .btn-sm { padding: 5px 12px; font-size: 0.82em; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         
-        /* Stats bar */
+        /* ===== TABS ===== */
+        .tabs {
+            display: flex;
+            gap: 0;
+            margin-bottom: 25px;
+            border-bottom: 2px solid #e9ecef;
+        }
+        .tab-btn {
+            padding: 12px 24px;
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 600;
+            color: #6c757d;
+            transition: all 0.2s;
+        }
+        .tab-btn:hover { color: #333; }
+        .tab-btn.active {
+            color: #007bff;
+            border-bottom-color: #007bff;
+        }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* ===== AI TASK CREATOR ===== */
+        .ai-section {
+            background: linear-gradient(135deg, #f8f9ff 0%, #f0f4ff 100%);
+            border: 1px solid #d0d7ff;
+            border-radius: 10px;
+            padding: 25px;
+            margin-bottom: 25px;
+        }
+        .ai-section h3 {
+            color: #333;
+            margin-bottom: 5px;
+            font-size: 1.15em;
+        }
+        .ai-section .subtitle {
+            color: #6c757d;
+            font-size: 0.88em;
+            margin-bottom: 18px;
+        }
+
+        .ai-prompt-area {
+            width: 100%;
+            min-height: 80px;
+            padding: 14px;
+            border: 2px solid #c8d0ff;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 0.95em;
+            resize: vertical;
+            transition: border-color 0.2s;
+            background: #fff;
+        }
+        .ai-prompt-area:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 3px rgba(0,123,255,0.15);
+        }
+        .ai-prompt-area::placeholder { color: #adb5bd; }
+
+        .ai-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 12px;
+            align-items: center;
+        }
+        .ai-status {
+            font-size: 0.85em;
+            color: #6c757d;
+            margin-left: auto;
+        }
+
+        /* AI Proposal box */
+        .ai-proposal {
+            display: none;
+            background: #fff;
+            border: 2px solid #28a745;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 18px;
+            position: relative;
+        }
+        .ai-proposal.visible { display: block; }
+        .ai-proposal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #e9ecef;
+        }
+        .ai-proposal-header h4 {
+            color: #28a745;
+            font-size: 1em;
+        }
+        .ai-proposal-body {
+            white-space: pre-wrap;
+            font-size: 0.93em;
+            line-height: 1.7;
+            max-height: 400px;
+            overflow-y: auto;
+            color: #333;
+        }
+        .ai-proposal-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+            padding-top: 12px;
+            border-top: 1px solid #e9ecef;
+        }
+
+        /* ===== ASSIGNMENT FORM ===== */
+        .assignment-form {
+            display: none;
+            border: 1px solid #e9ecef;
+            border-radius: 10px;
+            padding: 25px;
+            background: #fdfdfd;
+        }
+        .assignment-form.visible { display: block; }
+        .assignment-form h3 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+
+        .form-group {
+            margin-bottom: 18px;
+        }
+        .form-group label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 6px;
+            font-size: 0.9em;
+            color: #495057;
+        }
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 0.93em;
+            transition: border-color 0.2s;
+        }
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 2px rgba(0,123,255,0.15);
+        }
+        .form-group textarea {
+            min-height: 200px;
+            resize: vertical;
+        }
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        @media (max-width: 600px) {
+            .form-row { grid-template-columns: 1fr; }
+        }
+
+        .checkbox-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .checkbox-group label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: normal;
+            font-size: 0.88em;
+            cursor: pointer;
+            padding: 5px 10px;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            transition: all 0.2s;
+        }
+        .checkbox-group label:hover { border-color: #007bff; }
+        .checkbox-group input:checked + span {
+            color: #007bff;
+            font-weight: 600;
+        }
+
+        .form-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid #e9ecef;
+        }
+
+        /* Success message */
+        .success-banner {
+            display: none;
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+            padding: 18px 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        .success-banner.visible { display: block; }
+        .success-banner a { color: #155724; font-weight: 600; }
+
+        /* ===== STATS & STUDENTS ===== */
         .stats-bar {
             display: flex;
             gap: 20px;
@@ -79,7 +298,6 @@
         .stat-card.active .number { color: #28a745; }
         .stat-card.inactive .number { color: #dc3545; }
         
-        /* Loading state */
         .loading {
             text-align: center;
             padding: 60px 20px;
@@ -97,7 +315,6 @@
         }
         @keyframes spin { to { transform: rotate(360deg); } }
         
-        /* Error */
         .error-msg {
             text-align: center;
             padding: 30px;
@@ -107,13 +324,11 @@
             border-radius: 8px;
         }
         
-        /* Student list */
         .student-list {
             border: 1px solid #e9ecef;
             border-radius: 8px;
             overflow: hidden;
         }
-        
         .student-list-header {
             display: grid;
             grid-template-columns: 40px 1fr 140px 100px 100px;
@@ -126,7 +341,6 @@
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
-        
         .student-row {
             display: grid;
             grid-template-columns: 40px 1fr 140px 100px 100px;
@@ -139,7 +353,6 @@
         .student-row:hover { background: #f8f9fa; }
         .student-row:last-child { border-bottom: none; }
         
-        /* Status indicator */
         .status-dot {
             width: 12px;
             height: 12px;
@@ -150,26 +363,15 @@
         .status-dot.active { background: #28a745; box-shadow: 0 0 6px rgba(40, 167, 69, 0.4); }
         .status-dot.inactive { background: #dee2e6; }
         
-        /* Student name styling */
-        .student-name {
-            font-weight: 500;
-        }
+        .student-name { font-weight: 500; }
         .student-name.active { color: #28a745; }
         .student-name.inactive { color: #6c757d; }
-        .student-email {
-            font-size: 0.8em;
-            color: #adb5bd;
-        }
+        .student-email { font-size: 0.8em; color: #adb5bd; }
         
-        /* Metric cells */
-        .metric {
-            text-align: center;
-            font-weight: 500;
-        }
+        .metric { text-align: center; font-weight: 500; }
         .metric.highlight { color: #007bff; }
         .metric.zero { color: #dee2e6; }
         
-        /* Kairos status badge */
         .kairos-badge {
             display: inline-block;
             padding: 3px 10px;
@@ -178,17 +380,9 @@
             font-weight: 600;
             text-align: center;
         }
-        .kairos-badge.confirmed {
-            background: #d4edda;
-            color: #155724;
-        }
-        .kairos-badge.pending {
-            background: #f8f9fa;
-            color: #adb5bd;
-            border: 1px solid #dee2e6;
-        }
+        .kairos-badge.confirmed { background: #d4edda; color: #155724; }
+        .kairos-badge.pending { background: #f8f9fa; color: #adb5bd; border: 1px solid #dee2e6; }
         
-        /* Responsive */
         @media (max-width: 768px) {
             .student-list-header,
             .student-row {
@@ -205,6 +399,7 @@
 </head>
 <body>
     <div class="container">
+        <!-- ===== HEADER ===== -->
         <div class="header">
             <div>
                 <h1><span>📚</span> {{ course.name }}</h1>
@@ -213,39 +408,430 @@
                 </p>
             </div>
             <div style="display: flex; gap: 8px;">
-                <button class="btn btn-refresh" onclick="loadStudents()">🔄 Actualizar</button>
                 <a href="{% url 'index' %}" class="btn btn-back">← Volver</a>
             </div>
         </div>
-        
-        <!-- Stats Bar -->
-        <div class="stats-bar">
-            <div class="stat-card">
-                <div class="number" id="stat-total">—</div>
-                <div class="label">Total Alumnos</div>
+
+        <!-- ===== TABS ===== -->
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="tab-tasks" onclick="switchTab('tab-tasks')">
+                🤖 Crear Tarea con IA
+            </button>
+            <button class="tab-btn" data-tab="tab-students" onclick="switchTab('tab-students')">
+                👥 Alumnos
+            </button>
+        </div>
+
+        <!-- ======================================================== -->
+        <!-- TAB 1: CREAR TAREA CON IA                                -->
+        <!-- ======================================================== -->
+        <div id="tab-tasks" class="tab-content active">
+            
+            <!-- Step 1: AI Prompt -->
+            <div class="ai-section">
+                <h3>🤖 Generador de Tareas con IA</h3>
+                <p class="subtitle">
+                    Describe la tarea que quieres crear y DeepSeek la estructurará profesionalmente.
+                </p>
+
+                <textarea 
+                    id="ai-prompt" 
+                    class="ai-prompt-area"
+                    placeholder="Ej: Quiero una tarea simple con tres ejercicios de razonamiento crítico sobre el tema 5..."
+                ></textarea>
+
+                <div class="ai-actions">
+                    <button class="btn btn-primary" id="btn-generate" onclick="generateAssignment()">
+                        🤖 Generar con IA
+                    </button>
+                    <span class="ai-status" id="ai-status"></span>
+                </div>
+
+                <!-- AI Proposal Result -->
+                <div class="ai-proposal" id="ai-proposal">
+                    <div class="ai-proposal-header">
+                        <h4>✅ Propuesta de IA</h4>
+                        <span id="ai-meta" style="font-size: 0.8em; color: #6c757d;"></span>
+                    </div>
+                    <div class="ai-proposal-body" id="ai-proposal-text"></div>
+                    <div class="ai-proposal-actions">
+                        <button class="btn btn-success" onclick="acceptProposal()">
+                            ✅ Aceptar y usar como descripción
+                        </button>
+                        <button class="btn btn-warning btn-sm" onclick="generateAssignment()">
+                            🔄 Regenerar
+                        </button>
+                        <button class="btn btn-sm" style="background:#e9ecef;" onclick="dismissProposal()">
+                            Descartar
+                        </button>
+                    </div>
+                </div>
             </div>
-            <div class="stat-card active">
-                <div class="number" id="stat-kairos">—</div>
-                <div class="label">En Kairos ✅</div>
+
+            <!-- Step 2: Assignment Form -->
+            <div class="assignment-form" id="assignment-form">
+                <h3>📝 Configurar Tarea en Canvas</h3>
+                
+                <div class="form-group">
+                    <label>Nombre de la Tarea *</label>
+                    <input type="text" id="form-name" placeholder="Ej: Tarea 3 — Razonamiento Crítico">
+                </div>
+
+                <div class="form-group">
+                    <label>Descripción / Instrucciones</label>
+                    <textarea id="form-description" placeholder="Las instrucciones aparecerán aquí cuando aceptes la propuesta de IA..."></textarea>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Fecha de entrega</label>
+                        <input type="datetime-local" id="form-due-at">
+                    </div>
+                    <div class="form-group">
+                        <label>Puntos</label>
+                        <input type="number" id="form-points" value="100" min="0" step="1">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Disponible desde</label>
+                        <input type="datetime-local" id="form-unlock-at">
+                    </div>
+                    <div class="form-group">
+                        <label>Disponible hasta</label>
+                        <input type="datetime-local" id="form-lock-at">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Grupo de tareas</label>
+                    <select id="form-group">
+                        <option value="">Cargando...</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Tipos de entrega permitidos</label>
+                    <div class="checkbox-group">
+                        <label>
+                            <input type="checkbox" name="sub_type" value="online_text_entry" checked>
+                            <span>Texto en línea</span>
+                        </label>
+                        <label>
+                            <input type="checkbox" name="sub_type" value="online_upload" checked>
+                            <span>Subir archivos</span>
+                        </label>
+                        <label>
+                            <input type="checkbox" name="sub_type" value="online_url">
+                            <span>URL / Enlace</span>
+                        </label>
+                        <label>
+                            <input type="checkbox" name="sub_type" value="media_recording">
+                            <span>Grabación</span>
+                        </label>
+                        <label>
+                            <input type="checkbox" name="sub_type" value="none">
+                            <span>Sin entrega</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 8px;">
+                        <input type="checkbox" id="form-published">
+                        <span>Publicar inmediatamente (visible para estudiantes)</span>
+                    </label>
+                </div>
+
+                <div class="form-actions">
+                    <button class="btn btn-success" id="btn-create" onclick="createAssignment()">
+                        📤 Crear Tarea en Canvas
+                    </button>
+                    <button class="btn btn-sm" style="background:#e9ecef;" onclick="resetForm()">
+                        Cancelar
+                    </button>
+                </div>
             </div>
-            <div class="stat-card inactive">
-                <div class="number" id="stat-pending">—</div>
-                <div class="label">Sin sesión</div>
+
+            <!-- Success Banner -->
+            <div class="success-banner" id="success-banner">
+                <p style="font-size: 1.05em; margin-bottom: 5px;">
+                    <strong>✅ ¡Tarea creada exitosamente en Canvas!</strong>
+                </p>
+                <p id="success-detail"></p>
+                <div style="margin-top: 12px; display: flex; gap: 10px;">
+                    <a id="success-link" href="#" target="_blank" class="btn btn-primary btn-sm">
+                        Ver en Canvas ↗
+                    </a>
+                    <button class="btn btn-sm" style="background:#e9ecef;" onclick="resetAll()">
+                        Crear otra tarea
+                    </button>
+                </div>
             </div>
         </div>
-        
-        <!-- Student List Container -->
-        <div id="students-container">
-            <div class="loading">
-                <div class="spinner"></div>
-                <p>Cargando lista de alumnos desde Canvas...</p>
+
+        <!-- ======================================================== -->
+        <!-- TAB 2: ALUMNOS                                           -->
+        <!-- ======================================================== -->
+        <div id="tab-students" class="tab-content">
+            <div class="stats-bar">
+                <div class="stat-card">
+                    <div class="number" id="stat-total">—</div>
+                    <div class="label">Total Alumnos</div>
+                </div>
+                <div class="stat-card active">
+                    <div class="number" id="stat-kairos">—</div>
+                    <div class="label">En Kairos ✅</div>
+                </div>
+                <div class="stat-card inactive">
+                    <div class="number" id="stat-pending">—</div>
+                    <div class="label">Sin sesión</div>
+                </div>
+            </div>
+            
+            <div style="margin-bottom: 15px; text-align: right;">
+                <button class="btn btn-primary btn-sm" onclick="loadStudents()">🔄 Actualizar</button>
+            </div>
+
+            <div id="students-container">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p>Cargando lista de alumnos desde Canvas...</p>
+                </div>
             </div>
         </div>
     </div>
-    
+
+    <!-- ===== JAVASCRIPT ===== -->
     <script>
     const COURSE_ID = {{ course.id }};
-    
+    const CSRF_TOKEN = '{{ csrf_token }}';
+
+    // Generated AI text (stored temporarily)
+    let lastAIDescription = '';
+
+    // ================================================================
+    // TABS
+    // ================================================================
+    function switchTab(tabId) {
+        document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+        document.getElementById(tabId).classList.add('active');
+        document.querySelector(`[data-tab="${tabId}"]`).classList.add('active');
+
+        // Lazy-load students on first switch
+        if (tabId === 'tab-students' && !window._studentsLoaded) {
+            loadStudents();
+            window._studentsLoaded = true;
+        }
+    }
+
+    // ================================================================
+    // AI GENERATION
+    // ================================================================
+    function generateAssignment() {
+        const prompt = document.getElementById('ai-prompt').value.trim();
+        if (!prompt) {
+            alert('Escribe una descripción de la tarea que quieres crear.');
+            return;
+        }
+
+        const btn = document.getElementById('btn-generate');
+        const status = document.getElementById('ai-status');
+        btn.disabled = true;
+        btn.textContent = '⏳ Generando...';
+        status.textContent = 'Enviando a DeepSeek...';
+
+        // Hide previous proposal
+        document.getElementById('ai-proposal').classList.remove('visible');
+
+        fetch(`/api/teacher/course/${COURSE_ID}/ai-generate/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': CSRF_TOKEN,
+            },
+            body: JSON.stringify({ prompt }),
+        })
+        .then(r => {
+            if (!r.ok) return r.json().then(d => { throw new Error(d.error || `HTTP ${r.status}`); });
+            return r.json();
+        })
+        .then(data => {
+            lastAIDescription = data.description;
+
+            document.getElementById('ai-proposal-text').textContent = data.description;
+            document.getElementById('ai-meta').textContent = 
+                `${data.tokens_used} tokens · ${data.processing_time}s · ${data.model}`;
+            document.getElementById('ai-proposal').classList.add('visible');
+
+            status.textContent = '✅ Propuesta generada';
+        })
+        .catch(err => {
+            status.textContent = `❌ Error: ${err.message}`;
+            console.error('AI generate error:', err);
+        })
+        .finally(() => {
+            btn.disabled = false;
+            btn.textContent = '🤖 Generar con IA';
+        });
+    }
+
+    function acceptProposal() {
+        if (!lastAIDescription) return;
+
+        // Show the assignment form and copy AI text into description
+        const form = document.getElementById('assignment-form');
+        form.classList.add('visible');
+        document.getElementById('form-description').value = lastAIDescription;
+
+        // Scroll to form
+        form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+        // Load assignment groups if not loaded yet
+        loadAssignmentGroups();
+    }
+
+    function dismissProposal() {
+        document.getElementById('ai-proposal').classList.remove('visible');
+        lastAIDescription = '';
+    }
+
+    // ================================================================
+    // ASSIGNMENT FORM
+    // ================================================================
+    function loadAssignmentGroups() {
+        const select = document.getElementById('form-group');
+        if (select.dataset.loaded) return;
+
+        fetch(`/api/teacher/course/${COURSE_ID}/assignment-groups/`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.groups) {
+                    select.innerHTML = '<option value="">— Sin grupo específico —</option>';
+                    data.groups.forEach(g => {
+                        select.innerHTML += `<option value="${g.id}">${escapeHtml(g.name)}</option>`;
+                    });
+                    select.dataset.loaded = 'true';
+                }
+            })
+            .catch(err => {
+                select.innerHTML = '<option value="">Error cargando grupos</option>';
+                console.error('Error loading assignment groups:', err);
+            });
+    }
+
+    function toISO(localDatetime) {
+        if (!localDatetime) return null;
+        return new Date(localDatetime).toISOString();
+    }
+
+    function createAssignment() {
+        const name = document.getElementById('form-name').value.trim();
+        if (!name) {
+            alert('El nombre de la tarea es obligatorio.');
+            document.getElementById('form-name').focus();
+            return;
+        }
+
+        const description = document.getElementById('form-description').value;
+        const dueAt = document.getElementById('form-due-at').value;
+        const points = document.getElementById('form-points').value;
+        const unlockAt = document.getElementById('form-unlock-at').value;
+        const lockAt = document.getElementById('form-lock-at').value;
+        const groupId = document.getElementById('form-group').value;
+        const published = document.getElementById('form-published').checked;
+
+        // Gather submission types
+        const subTypes = [];
+        document.querySelectorAll('input[name="sub_type"]:checked').forEach(cb => {
+            subTypes.push(cb.value);
+        });
+        if (subTypes.length === 0) subTypes.push('none');
+
+        const btn = document.getElementById('btn-create');
+        btn.disabled = true;
+        btn.textContent = '⏳ Creando en Canvas...';
+
+        const payload = {
+            name,
+            description,
+            submission_types: subTypes,
+            published,
+        };
+        if (dueAt) payload.due_at = toISO(dueAt);
+        if (unlockAt) payload.unlock_at = toISO(unlockAt);
+        if (lockAt) payload.lock_at = toISO(lockAt);
+        if (points) payload.points_possible = parseFloat(points);
+        if (groupId) payload.assignment_group_id = parseInt(groupId);
+
+        fetch(`/api/teacher/course/${COURSE_ID}/create-assignment/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': CSRF_TOKEN,
+            },
+            body: JSON.stringify(payload),
+        })
+        .then(r => {
+            if (!r.ok) return r.json().then(d => { throw new Error(d.error || d.canvas_error || `HTTP ${r.status}`); });
+            return r.json();
+        })
+        .then(data => {
+            // Show success banner
+            const banner = document.getElementById('success-banner');
+            banner.classList.add('visible');
+            document.getElementById('success-detail').textContent = 
+                `"${data.assignment.name}" — ${data.assignment.points_possible || 0} pts` +
+                (data.assignment.published ? ' (Publicada)' : ' (Borrador)');
+            
+            if (data.assignment.html_url) {
+                document.getElementById('success-link').href = data.assignment.html_url;
+                document.getElementById('success-link').style.display = 'inline-block';
+            } else {
+                document.getElementById('success-link').style.display = 'none';
+            }
+
+            // Hide form
+            document.getElementById('assignment-form').classList.remove('visible');
+
+            banner.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        })
+        .catch(err => {
+            alert(`Error creando tarea: ${err.message}`);
+            console.error('Create assignment error:', err);
+        })
+        .finally(() => {
+            btn.disabled = false;
+            btn.textContent = '📤 Crear Tarea en Canvas';
+        });
+    }
+
+    function resetForm() {
+        document.getElementById('assignment-form').classList.remove('visible');
+    }
+
+    function resetAll() {
+        document.getElementById('ai-prompt').value = '';
+        document.getElementById('ai-proposal').classList.remove('visible');
+        document.getElementById('assignment-form').classList.remove('visible');
+        document.getElementById('success-banner').classList.remove('visible');
+        document.getElementById('form-name').value = '';
+        document.getElementById('form-description').value = '';
+        document.getElementById('form-due-at').value = '';
+        document.getElementById('form-points').value = '100';
+        document.getElementById('form-unlock-at').value = '';
+        document.getElementById('form-lock-at').value = '';
+        document.getElementById('form-published').checked = false;
+        document.getElementById('ai-status').textContent = '';
+        lastAIDescription = '';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    // ================================================================
+    // STUDENTS TAB
+    // ================================================================
     function loadStudents() {
         const container = document.getElementById('students-container');
         container.innerHTML = `
@@ -270,14 +856,13 @@
                     <div class="error-msg">
                         <p><strong>Error al cargar alumnos</strong></p>
                         <p>${error.message}</p>
-                        <button class="btn btn-refresh" onclick="loadStudents()" style="margin-top: 15px;">Reintentar</button>
+                        <button class="btn btn-primary btn-sm" onclick="loadStudents()" style="margin-top: 15px;">Reintentar</button>
                     </div>
                 `;
             });
     }
     
     function renderStudents(data) {
-        // Update stats
         document.getElementById('stat-total').textContent = data.total_students;
         document.getElementById('stat-kairos').textContent = data.students_in_kairos;
         document.getElementById('stat-pending').textContent = data.total_students - data.students_in_kairos;
@@ -308,8 +893,6 @@
             const isActive = student.has_kairos_session;
             const statusClass = isActive ? 'active' : 'inactive';
             const nameClass = isActive ? 'active' : 'inactive';
-            
-            // Format login info
             const totalLogins = student.total_logins || 0;
             const weekLogins = student.logins_this_week || 0;
             const badgeClass = isActive ? 'confirmed' : 'pending';
@@ -338,8 +921,6 @@
         });
         
         html += '</div>';
-        
-        // Add last updated timestamp
         html += `
             <p style="text-align: right; color: #adb5bd; font-size: 0.8em; margin-top: 10px;">
                 Última actualización: ${new Date().toLocaleString('es-MX')}
@@ -354,9 +935,6 @@
         div.textContent = text;
         return div.innerHTML;
     }
-    
-    // Load on page ready
-    document.addEventListener('DOMContentLoaded', loadStudents);
     </script>
 </body>
 </html>
