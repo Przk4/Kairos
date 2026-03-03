@@ -6,12 +6,14 @@ from django.contrib.auth import login as auth_login, logout as auth_logout
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.contrib.auth.decorators import login_required
+from django.urls import reverse
 from datetime import timedelta
 import requests
 import logging
 import secrets
 import json
 import time
+from urllib.parse import urlencode, urlparse
 from .models import CanvasToken, Course, Module, ModuleAnalysis, ModuleEmbedding, ChatMessage, StudentProfile, LoginRecord
 from .canvas_auth import (
     get_valid_canvas_token, 
@@ -26,6 +28,37 @@ from .rag_service import get_rag_service
 from .ai_service import get_ai_service
 
 logger = logging.getLogger(__name__)
+
+
+def _get_canvas_redirect_uri(request):
+    """
+    Obtiene una redirect_uri válida y consistente para OAuth.
+    - Usa CANVAS_REDIRECT_URI si está configurada.
+    - Si la config apunta a localhost pero la petición llega por otro host,
+      usa la URL absoluta del callback actual para evitar redirecciones inválidas.
+    """
+    configured_uri = (getattr(settings, 'CANVAS_REDIRECT_URI', '') or '').strip()
+    request_callback_uri = request.build_absolute_uri(reverse('canvas_callback'))
+
+    if not configured_uri:
+        return request_callback_uri
+
+    try:
+        configured_host = (urlparse(configured_uri).hostname or '').lower()
+    except Exception:
+        configured_host = ''
+
+    request_host = request.get_host().split(':')[0].lower()
+    if configured_host in {'127.0.0.1', 'localhost'} and request_host not in {'127.0.0.1', 'localhost'}:
+        logger.warning(
+            "CANVAS_REDIRECT_URI apunta a localhost pero la petición llegó por %s. "
+            "Usando callback dinámico: %s",
+            request_host,
+            request_callback_uri,
+        )
+        return request_callback_uri
+
+    return configured_uri
 
 # Almacenamiento temporal del último flujo de prompt para debug
 # NOTA: Solo para desarrollo. En producción con múltiples workers,
@@ -125,14 +158,15 @@ def canvas_login(request):
     state = secrets.token_urlsafe(32)
     request.session['oauth_state'] = state
     
-    auth_url = (
-        f"{settings.CANVAS_BASE_URL}/login/oauth2/auth"
-        f"?client_id={settings.CANVAS_CLIENT_ID}"
-        f"&response_type=code"
-        f"&redirect_uri={settings.CANVAS_REDIRECT_URI}"
-        f"&state={state}"
-        f"&scope=url:GET|/api/v1/courses"
-    )
+    redirect_uri = _get_canvas_redirect_uri(request)
+    auth_params = {
+        'client_id': settings.CANVAS_CLIENT_ID,
+        'response_type': 'code',
+        'redirect_uri': redirect_uri,
+        'state': state,
+        'scope': 'url:GET|/api/v1/courses',
+    }
+    auth_url = f"{settings.CANVAS_BASE_URL}/login/oauth2/auth?{urlencode(auth_params)}"
     return redirect(auth_url)
 
 
@@ -159,11 +193,12 @@ def canvas_callback(request):
         return render(request, 'tu_app/error.html', {'error': 'No se recibió el código de autorización.'})
 
     token_url = f"{settings.CANVAS_BASE_URL}/login/oauth2/token"
+    redirect_uri = _get_canvas_redirect_uri(request)
     payload = {
         'grant_type': 'authorization_code',
         'client_id': settings.CANVAS_CLIENT_ID,
         'client_secret': settings.CANVAS_CLIENT_SECRET,
-        'redirect_uri': settings.CANVAS_REDIRECT_URI,
+        'redirect_uri': redirect_uri,
         'code': auth_code,
     }
 
