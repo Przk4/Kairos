@@ -1113,33 +1113,20 @@ class RAGService:
                     for entry in top_entries:
                         idx = entry['index']
                         doc = collection['documents'][idx]
-                        # Filtrar documentos muy cortos (probablemente solo nombres de archivo)
-                        # Aceptar si tiene > 100 caracteres O si contiene contenido real
-                        if len(doc) > 100:
-                            metadata = collection['metadatas'][idx].copy()
-                            metadata['importance_used'] = str(round(entry['importance'], 3))
-                            metadata['combined_score'] = str(round(entry['combined_score'], 3))
-                            context_list.append({
-                                'content': doc,
-                                'metadata': metadata,
-                                'relevance_score': float(entry['similarity']),
-                                'importance_score': float(entry['importance']),
-                                'combined_score': float(entry['combined_score'])
-                            })
-                    
-                    # Si no hay documentos largos, devolver los que haya (fallback)
-                    if not context_list:
-                        for entry in top_entries:
-                            idx = entry['index']
-                            metadata = collection['metadatas'][idx].copy()
-                            metadata['importance_used'] = str(round(entry['importance'], 3))
-                            context_list.append({
-                                'content': collection['documents'][idx],
-                                'metadata': metadata,
-                                'relevance_score': float(entry['similarity']),
-                                'importance_score': float(entry['importance']),
-                                'combined_score': float(entry['combined_score'])
-                            })
+                        metadata = collection['metadatas'][idx].copy()
+                        metadata['importance_used'] = str(round(entry['importance'], 3))
+                        metadata['combined_score'] = str(round(entry['combined_score'], 3))
+                        metadata['chunk_length'] = str(len(doc))
+                        
+                        # Incluir TODOS los chunks seleccionados sin filtrar por longitud
+                        # DeepSeek puede manejar chunks cortos y decidir su relevancia
+                        context_list.append({
+                            'content': doc,
+                            'metadata': metadata,
+                            'relevance_score': float(entry['similarity']),
+                            'importance_score': float(entry['importance']),
+                            'combined_score': float(entry['combined_score'])
+                        })
                     
                     # Log del ranking
                     if has_importance and importance_weight > 0:
