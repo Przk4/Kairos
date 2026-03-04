@@ -644,6 +644,156 @@ class RAGService:
         
         return chunks
     
+    def _calculate_chunk_importance(self, chunk: str, chunk_index: int, total_chunks: int, 
+                                     full_text: str = None, document_title: str = None) -> float:
+        """
+        Calcula un score de importancia (0.0-1.0) para un chunk basado en:
+        - Tipo de contenido (definición vs ejemplo)
+        - Posición en el documento (inicio/conclusión vs medio)
+        - Densidad de información
+        - Presencia de palabras clave estructurales
+        
+        Args:
+            chunk: El texto del chunk
+            chunk_index: Índice del chunk (0-based)
+            total_chunks: Total de chunks del documento
+            full_text: Texto completo del documento (opcional, para contexto)
+            document_title: Título del documento (opcional)
+            
+        Returns:
+            Float entre 0.0 (ejemplo/detalle) y 1.0 (concepto central)
+        """
+        if not chunk or not chunk.strip():
+            return 0.3  # Score bajo para chunks vacíos
+        
+        chunk_lower = chunk.lower()
+        score = 0.5  # Score base
+        
+        # ===== 1. INDICADORES DE DEFINICIÓN/CONCEPTO CENTRAL (+) =====
+        definition_patterns = [
+            r'\b(es|son|se define como|significa|consiste en|se entiende por)\b',
+            r'\b(definici[oó]n|concepto|principio|ley|teor[ií]a|fundamento)\b',
+            r'\b(importante|esencial|fundamental|clave|b[aá]sico|principal)\b',
+            r'\b(objetivo|prop[oó]sito|meta|fin|conclusi[oó]n)\b',
+        ]
+        for pattern in definition_patterns:
+            if re.search(pattern, chunk_lower):
+                score += 0.08
+        
+        # ===== 2. INDICADORES DE EJEMPLO/DETALLE (-) =====
+        example_patterns = [
+            r'\b(por ejemplo|ejemplo|e\.g\.|i\.e\.|como muestra|ilustra)\b',
+            r'\b(caso particular|en este caso|supongamos|imagina)\b',
+            r'\b(espec[ií]ficamente|particularmente|en concreto)\b',
+            r'\b(ver figura|ver tabla|como se observa|seg[uú]n la imagen)\b',
+        ]
+        for pattern in example_patterns:
+            if re.search(pattern, chunk_lower):
+                score -= 0.05
+        
+        # ===== 3. POSICIÓN EN EL DOCUMENTO =====
+        # Inicio y final suelen tener información más importante (intro/conclusión)
+        if total_chunks > 1:
+            position_ratio = chunk_index / (total_chunks - 1) if total_chunks > 1 else 0.5
+            
+            # Primer y último chunk son más importantes
+            if chunk_index == 0:
+                score += 0.12  # Introducción
+            elif chunk_index == total_chunks - 1:
+                score += 0.10  # Conclusión
+            elif position_ratio < 0.25:
+                score += 0.05  # Cerca del inicio
+            elif position_ratio > 0.75:
+                score += 0.03  # Cerca del final
+            # El medio tiene score neutro
+        
+        # ===== 4. ESTRUCTURA/FORMATO =====
+        # Títulos, bullets points, enumeraciones suelen ser importantes
+        structure_patterns = [
+            (r'^[A-Z][A-Z\s]+$', 0.15),  # TÍTULOS EN MAYÚSCULAS
+            (r'^\d+[\.\)]\s', 0.08),  # Listas numeradas
+            (r'^[-•]\s', 0.05),  # Bullet points
+            (r'\b(paso \d|etapa \d|fase \d)\b', 0.06),  # Pasos de proceso
+            (r'\b(primero|segundo|tercero|finalmente)\b', 0.04),  # Secuencias
+        ]
+        for pattern, bonus in structure_patterns:
+            if re.search(pattern, chunk_lower, re.MULTILINE):
+                score += bonus
+        
+        # ===== 5. DENSIDAD DE INFORMACIÓN =====
+        # Chunks con más sustantivos/verbos técnicos vs relleno
+        words = chunk_lower.split()
+        if len(words) > 10:
+            # Palabras funcionales (poco informativas)
+            filler_words = {'el', 'la', 'los', 'las', 'de', 'del', 'al', 'a', 'en', 
+                           'con', 'por', 'para', 'que', 'y', 'o', 'un', 'una', 'como',
+                           'es', 'son', 'se', 'su', 'sus', 'este', 'esta', 'esto'}
+            filler_count = sum(1 for w in words if w in filler_words)
+            content_ratio = 1 - (filler_count / len(words))
+            
+            # Alta densidad de contenido = más importante
+            if content_ratio > 0.7:
+                score += 0.08
+            elif content_ratio > 0.6:
+                score += 0.04
+        
+        # ===== 6. LONGITUD DEL CHUNK =====
+        # Chunks muy cortos suelen ser encabezados, muy largos pueden ser relleno
+        chunk_len = len(chunk)
+        if 200 < chunk_len < 1200:
+            score += 0.05  # Longitud óptima
+        elif chunk_len < 100:
+            score -= 0.05  # Muy corto (quizás solo título)
+        
+        # ===== 7. TÍTULO DEL DOCUMENTO =====
+        # Si el chunk contiene palabras del título, es más relevante
+        if document_title:
+            title_words = set(re.findall(r'\b[a-záéíóúñü]{4,}\b', document_title.lower()))
+            chunk_words = set(re.findall(r'\b[a-záéíóúñü]{4,}\b', chunk_lower))
+            overlap = len(title_words & chunk_words)
+            if overlap > 0:
+                score += min(0.10, overlap * 0.03)
+        
+        # Normalizar entre 0.1 y 1.0 (nunca 0 total)
+        return max(0.1, min(1.0, score))
+    
+    def _calculate_importance_batch(self, chunks: List[str], document_title: str = None) -> List[float]:
+        """
+        Calcula importancia para múltiples chunks de forma eficiente.
+        
+        Args:
+            chunks: Lista de chunks
+            document_title: Título del documento
+            
+        Returns:
+            Lista de scores de importancia (0.1-1.0)
+        """
+        if not chunks:
+            return []
+        
+        # Concatenar full_text para contexto
+        full_text = '\n'.join(chunks)
+        total_chunks = len(chunks)
+        
+        scores = []
+        for idx, chunk in enumerate(chunks):
+            score = self._calculate_chunk_importance(
+                chunk=chunk,
+                chunk_index=idx,
+                total_chunks=total_chunks,
+                full_text=full_text,
+                document_title=document_title
+            )
+            scores.append(score)
+        
+        # Log de distribución
+        if scores:
+            avg_score = sum(scores) / len(scores)
+            logger.debug(f"[IMPORTANCE] {len(scores)} chunks scored, avg={avg_score:.3f}, "
+                        f"min={min(scores):.3f}, max={max(scores):.3f}")
+        
+        return scores
+
     def analyze_module(self, module, user_token: str) -> bool:
         """
         Analiza todos los items de un módulo y crea embeddings.
@@ -680,7 +830,8 @@ class RAGService:
                 self.in_memory_db[collection_name] = {
                     'documents': [],
                     'embeddings': [],
-                    'metadatas': []
+                    'metadatas': [],
+                    'importance_scores': []  # NUEVO: Scores jerárquicos de importancia
                 }
                 collection = self.in_memory_db[collection_name]
             
@@ -726,9 +877,13 @@ class RAGService:
                         
                         logger.info(f"  [CHUNKS] {len(text)} chars -> {len(chunks)} semantic chunks")
                         
+                        # NUEVO: Calcular importancia de cada chunk
+                        importance_scores = self._calculate_importance_batch(chunks, document_title=item.title)
+                        
                         # Crear embedding para cada chunk
                         for chunk_idx, chunk in enumerate(chunks):
                             embedding = self.embedding_model.encode(chunk).tolist()
+                            importance = importance_scores[chunk_idx] if chunk_idx < len(importance_scores) else 0.5
                             embeddings_count += 1
                             
                             doc_id = f"item_{item.id}_chunk_{chunk_idx}"
@@ -740,6 +895,7 @@ class RAGService:
                                 'chunk_index': str(chunk_idx),
                                 'chunk_total': str(len(chunks)),
                                 'has_content': 'yes' if is_external_content else 'no',
+                                'importance_score': str(round(importance, 3)),  # NUEVO
                             }
                             
                             if self.using_chromadb and self.client:
@@ -754,11 +910,13 @@ class RAGService:
                                 collection['documents'].append(chunk)
                                 collection['embeddings'].append(embedding)
                                 collection['metadatas'].append(metadata)
+                                collection['importance_scores'].append(importance)  # NUEVO
                         
-                        logger.debug(f"  [DONE] Created {len(chunks)} embeddings")
+                        logger.debug(f"  [DONE] Created {len(chunks)} embeddings with importance scores")
                     else:
                         # Sin contenido extraído - usar solo título como documento
                         embedding = self.embedding_model.encode(text).tolist()
+                        importance = 0.3  # Score bajo para solo títulos
                         embeddings_count += 1
                         
                         doc_id = f"item_{item.id}"
@@ -768,6 +926,7 @@ class RAGService:
                             'item_type': item.get_item_type_display(),
                             'module_id': str(module.id),
                             'has_content': 'no',
+                            'importance_score': str(round(importance, 3)),  # NUEVO
                         }
                         
                         if self.using_chromadb and self.client:
@@ -782,8 +941,9 @@ class RAGService:
                             collection['documents'].append(text)
                             collection['embeddings'].append(embedding)
                             collection['metadatas'].append(metadata)
+                            collection['importance_scores'].append(importance)  # NUEVO
                         
-                        logger.debug(f"  [DONE] Created 1 embedding (sin contenido extraído)")
+                        logger.debug(f"  [DONE] Created 1 embedding (sin contenido extraído, importance={importance})")
 
                     
                     # Log del embedding
@@ -818,19 +978,40 @@ class RAGService:
             return False
     
     def search_context(self, query: str, module_id: int, course_id: int, 
-                      top_k: int = 5) -> List[dict]:
+                      top_k: int = 5, query_type: str = 'general',
+                      importance_weight: float = None) -> List[dict]:
         """
         Busca contexto relevante en la base de conocimiento.
+        
+        NUEVO: Usa ranking combinado de similitud + importancia jerárquica.
         
         Args:
             query: Pregunta del estudiante
             module_id: ID del módulo a buscar
             course_id: ID del curso
             top_k: Número de resultados a retornar
+            query_type: Tipo de pregunta ('summary', 'definition', 'comparison', etc.)
+            importance_weight: Peso de importancia (0-1). Si None, se calcula según query_type.
         
         Returns:
             Lista de documentos relevantes con metadata
         """
+        # Definir pesos de importancia por tipo de consulta
+        # Para resúmenes: importancia alta (priorizar conceptos centrales)
+        # Para preguntas específicas: importancia baja (priorizar similitud)
+        IMPORTANCE_WEIGHTS = {
+            'summary': 0.4,        # Priorizar chunks conceptuales importantes
+            'definition': 0.2,     # Balance hacia similitud semántica
+            'comparison': 0.25,    # Balance moderado
+            'list': 0.3,           # Priorizar estructura
+            'specific': 0.1,       # Casi solo similitud
+            'explanation': 0.2,    # Balance hacia similitud
+            'general': 0.15,       # Default: priorizar similitud con peso leve
+        }
+        
+        if importance_weight is None:
+            importance_weight = IMPORTANCE_WEIGHTS.get(query_type, 0.15)
+        
         debug_service = get_debug_service()
         try:
             collection_name = f"module_{module_id}_course_{course_id}"
@@ -898,29 +1079,72 @@ class RAGService:
                             similarity = np.dot(query_embedding, emb) / (query_norm * emb_norm + 1e-8)
                             similarities.append(float(similarity))
                     
-                    # Obtener top_k más similares
-                    top_indices = sorted(range(len(similarities)), key=lambda i: similarities[i], reverse=True)[:top_k]
+                    # NUEVO: Obtener importance_scores (compatible con colecciones antiguas)
+                    importance_scores = collection.get('importance_scores', [])
+                    has_importance = len(importance_scores) == len(similarities)
+                    
+                    # NUEVO: Calcular scores combinados
+                    # final_score = (1 - weight) * similarity + weight * importance
+                    combined_scores = []
+                    for i, sim in enumerate(similarities):
+                        if has_importance:
+                            imp = importance_scores[i]
+                        else:
+                            # Fallback: obtener de metadata si existe
+                            try:
+                                imp = float(collection['metadatas'][i].get('importance_score', 0.5))
+                            except (ValueError, KeyError):
+                                imp = 0.5
+                        
+                        # Score combinado ponderado
+                        combined = (1 - importance_weight) * sim + importance_weight * imp
+                        combined_scores.append({
+                            'index': i,
+                            'similarity': sim,
+                            'importance': imp,
+                            'combined_score': combined
+                        })
+                    
+                    # Ordenar por score combinado
+                    combined_scores.sort(key=lambda x: x['combined_score'], reverse=True)
+                    top_entries = combined_scores[:top_k]
                     
                     context_list = []
-                    for idx in top_indices:
+                    for entry in top_entries:
+                        idx = entry['index']
                         doc = collection['documents'][idx]
                         # Filtrar documentos muy cortos (probablemente solo nombres de archivo)
                         # Aceptar si tiene > 100 caracteres O si contiene contenido real
                         if len(doc) > 100:
+                            metadata = collection['metadatas'][idx].copy()
+                            metadata['importance_used'] = str(round(entry['importance'], 3))
+                            metadata['combined_score'] = str(round(entry['combined_score'], 3))
                             context_list.append({
                                 'content': doc,
-                                'metadata': collection['metadatas'][idx],
-                                'relevance_score': float(similarities[idx])
+                                'metadata': metadata,
+                                'relevance_score': float(entry['similarity']),
+                                'importance_score': float(entry['importance']),
+                                'combined_score': float(entry['combined_score'])
                             })
                     
                     # Si no hay documentos largos, devolver los que haya (fallback)
                     if not context_list:
-                        for idx in top_indices:
+                        for entry in top_entries:
+                            idx = entry['index']
+                            metadata = collection['metadatas'][idx].copy()
+                            metadata['importance_used'] = str(round(entry['importance'], 3))
                             context_list.append({
                                 'content': collection['documents'][idx],
-                                'metadata': collection['metadatas'][idx],
-                                'relevance_score': float(similarities[idx])
+                                'metadata': metadata,
+                                'relevance_score': float(entry['similarity']),
+                                'importance_score': float(entry['importance']),
+                                'combined_score': float(entry['combined_score'])
                             })
+                    
+                    # Log del ranking
+                    if has_importance and importance_weight > 0:
+                        logger.debug(f"[SEARCH] query_type={query_type}, importance_weight={importance_weight}, "
+                                    f"reranked {len(context_list)} results")
                     
                     debug_service.log_rag_search(query, module_id, len(context_list))
                     return context_list

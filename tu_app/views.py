@@ -26,6 +26,7 @@ from .canvas_auth import (
 from .debug_service import get_debug_service
 from .rag_service import get_rag_service
 from .ai_service import get_ai_service
+from .query_analyzer import get_query_analyzer
 
 logger = logging.getLogger(__name__)
 
@@ -533,14 +534,32 @@ def chat_api(request):
             # Obtenemos contexto con RAG
             rag_service = get_rag_service()
             
+            # NUEVO: Analizar pregunta para optimizar búsqueda
+            query_analyzer = get_query_analyzer(rag_service.embedding_model)
+            query_analysis = query_analyzer.analyze(question)
+            
+            # Usar número de fragmentos dinámico basado en análisis
+            optimal_fragments = query_analysis['num_fragments']
+            query_type = query_analysis['query_type']
+            
             # Si no hay módulo específico, buscamos en todos
             if module:
-                context = rag_service.search_context(question, module.id, course.id, top_k=5)
+                context = rag_service.search_context(
+                    question, module.id, course.id, 
+                    top_k=optimal_fragments,
+                    query_type=query_type  # NUEVO: Para ranking jerárquico
+                )
             else:
                 # Buscar en todos los módulos del curso
+                # Dividir fragmentos entre módulos
+                fragments_per_module = max(2, optimal_fragments // max(1, course.modules.count()))
                 context = []
                 for mod in course.modules.all():
-                    mod_context = rag_service.search_context(question, mod.id, course.id, top_k=3)
+                    mod_context = rag_service.search_context(
+                        question, mod.id, course.id, 
+                        top_k=fragments_per_module,
+                        query_type=query_type  # NUEVO: Para ranking jerárquico
+                    )
                     context.extend(mod_context)
             
             # Extraer información de embeddings para debug
@@ -578,6 +597,7 @@ def chat_api(request):
             _last_prompt_flow = {
                 'question': question,
                 'question_length': len(question),
+                'query_analysis': query_analysis,  # NUEVO: Análisis inteligente de pregunta
                 'retrieved_count': context_count,
                 'retrieved_docs': embeddings_info,
                 'context': context_text,  # SIN TRUNCAR - completo
