@@ -39,7 +39,11 @@
             line-height: 1.6;
             font-size: 0.95em;
             white-space: pre-wrap;
-            overflow-wrap: break-word;
+            overflow-wrap: anywhere;
+            tab-size: 4;
+            -moz-tab-size: 4;
+            /* Allow horizontal scroll for very wide content (tables/code) */
+            overflow-x: auto;
         }
         .message.student .message-content { background: #28a745; }
         .message.ai .message-content { background: #6c757d; }
@@ -135,7 +139,10 @@
                     {% for message in chat_history %}
                         <div class="message {{ message.role }}">
                             <div>
-                                <div class="message-content">{% if message.role == 'ai' %}🤖{% else %}👤{% endif %} {{ message.content }}</div>
+                                <div class="message-content">
+                                    <span class="msg-emoji">{% if message.role == 'ai' %}🤖{% else %}👤{% endif %}</span>
+                                    <span class="msg-text">{{ message.content }}</span>
+                                </div>
                                 <div class="message-time">{{ message.created_at|date:"H:i" }}</div>
                             </div>
                         </div>
@@ -229,6 +236,55 @@
             console.error(`[CHAT] Error syncing status for module ${moduleId}:`, error);
         }
     }
+
+    // ========== Render Markdown safely for message text ==========
+    document.addEventListener('DOMContentLoaded', function() {
+        // Load marked + DOMPurify via CDN dynamically
+        const scripts = [
+            'https://unpkg.com/marked@5.0.2/marked.min.js',
+            'https://unpkg.com/dompurify@2.4.0/dist/purify.min.js'
+        ];
+
+        function loadScript(src) {
+            return new Promise((resolve, reject) => {
+                const s = document.createElement('script');
+                s.src = src;
+                s.onload = resolve;
+                s.onerror = reject;
+                document.head.appendChild(s);
+            });
+        }
+
+        Promise.all(scripts.map(loadScript)).then(() => {
+            document.querySelectorAll('.msg-text').forEach(el => {
+                try {
+                    const txt = el.textContent || '';
+                    // Convert markdown -> HTML, then sanitize
+                    const raw = window.marked.parse(txt || '');
+                    const clean = window.DOMPurify.sanitize(raw, {ALLOWED_ATTR: ['href', 'title', 'target']});
+                    el.innerHTML = clean;
+                } catch (e) {
+                    // fallback: leave plain text
+                    console.warn('Markdown render failed', e);
+                }
+            });
+            // Make tables responsive inside message-content
+            document.querySelectorAll('.message-content table').forEach(tbl => {
+                tbl.style.width = '100%';
+                tbl.style.borderCollapse = 'collapse';
+                tbl.querySelectorAll('th, td').forEach(cell => {
+                    cell.style.border = '1px solid rgba(255,255,255,0.15)';
+                    cell.style.padding = '6px 8px';
+                });
+                // Wrap table in a scroll container if necessary
+                const wrapper = document.createElement('div');
+                wrapper.style.overflowX = 'auto';
+                wrapper.style.marginTop = '8px';
+                tbl.parentNode.insertBefore(wrapper, tbl);
+                wrapper.appendChild(tbl);
+            });
+        }).catch(err => console.warn('Could not load markdown renderer', err));
+    });
 
     // ========== SELECCIÓN DE MÓDULO ==========
     // Seleccionar/deseleccionar módulo (agrega/quita clase .active)
