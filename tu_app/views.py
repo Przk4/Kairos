@@ -651,6 +651,26 @@ def chat_api(request):
             processing_time = time.time() - start_time
             tokens = ai_response.get('tokens_used', 0)
             answer = ai_response.get('answer', '')
+
+            # Clean and normalize AI answer formatting:
+            # - Remove common indentation (dedent)
+            # - Trim leading/trailing whitespace
+            # - Strip trailing spaces on each line
+            # - Collapse excessive blank lines (3+ -> 2)
+            try:
+                import re
+                from textwrap import dedent
+
+                if answer and isinstance(answer, str):
+                    cleaned = dedent(answer)
+                    cleaned = cleaned.strip()
+                    # Remove trailing spaces per line
+                    cleaned = '\n'.join([ln.rstrip() for ln in cleaned.splitlines()])
+                    # Collapse multiple blank lines to at most two
+                    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+                    answer = cleaned
+            except Exception as _e:
+                logger.warning(f"Answer cleaning failed: {_e}")
             
             # ACTUALIZAR RESPUESTA EN FLUJO DEBUG
             _last_prompt_flow['response'] = answer
