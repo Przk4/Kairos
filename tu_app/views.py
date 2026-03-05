@@ -576,13 +576,23 @@ def chat_api(request):
                         for i, item in enumerate(context):
                             similarity = item.get('relevance_score', item.get('similarity', 0))
                             item_title = item.get('metadata', {}).get('item_title', 'Unknown')
+                            raw_content = item.get('content', '')
+                            
+                            # Limpiar contenido: remover marcadores de slide y ruido residual
+                            import re as _re
+                            clean_content = _re.sub(r'\n*---\s*Slide\s*\d+\s*---\n*', '\n', raw_content)
+                            clean_content = _re.sub(r'\n*---\s*Página\s*\d+\s*---\n*', '\n', clean_content)
+                            clean_content = _re.sub(r'(?m)^20\d{2}\s+.*(?:pie de página|footer|ejemplo de texto).*$', '', clean_content, flags=_re.IGNORECASE)
+                            clean_content = _re.sub(r'(?m)^\d{1,3}\s*$', '', clean_content)
+                            clean_content = _re.sub(r'\n{3,}', '\n\n', clean_content).strip()
+                            
                             embeddings_info.append({
                                 'rank': i + 1,
                                 'title': item_title,
                                 'similarity': float(similarity) if similarity else 0.0,
-                                'preview': item.get('content', '')[:150],
+                                'preview': clean_content[:150],
                             })
-                            context_text += f"\n[Docs {i+1}] {item_title}\n{item.get('content', '')}"
+                            context_text += f"\n[Docs {i+1}] {item_title}\n{clean_content}"
                     else:
                         context_text = str(context)
             
@@ -1603,6 +1613,7 @@ def get_all_modules_stats(request):
         chromadb_available = False
         chromadb_collections = {}
         try:
+            rag_service = get_rag_service()
             if rag_service.using_chromadb and rag_service.client:
                 chromadb_available = True
                 # Obtener todas las colecciones de ChromaDB

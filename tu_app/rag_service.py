@@ -177,10 +177,46 @@ class RAGService:
             logger.error(f"Error extracting PDF text: {e}", exc_info=True)
             return f"[Error leyendo PDF: {str(e)[:100]}]"
     
+    def _clean_slide_text(self, text: str) -> str:
+        """
+        Limpia texto extraído de un slide eliminando ruido típico de PPTX.
+        """
+        if not text:
+            return ""
+        
+        lines = text.split('\n')
+        cleaned_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Eliminar líneas que son solo números (números de slide/página)
+            if re.match(r'^\d{1,3}$', line):
+                continue
+            
+            # Eliminar pies de página típicos: "20XX Ejemplo de Texto de pie de página NN"
+            if re.match(r'^20\d{2}\s+.*(?:pie de página|footer|example|ejemplo).*$', line, re.IGNORECASE):
+                continue
+            
+            # Eliminar líneas de copyright/footer genéricos
+            if re.match(r'^(?:©|\(c\)|copyright)\s*20\d{2}', line, re.IGNORECASE):
+                continue
+            
+            # Eliminar líneas demasiado cortas que no aportan (< 3 chars)
+            if len(line) < 3:
+                continue
+            
+            cleaned_lines.append(line)
+        
+        return '\n'.join(cleaned_lines)
+    
     def _extract_text_from_pptx(self, pptx_bytes) -> Optional[str]:
         """
         Extrae texto de un archivo PPTX (PowerPoint).
-        Extrae texto de todos los slides.
+        Agrupa contenido por slide con título semántico en lugar de marcadores numéricos.
+        Limpia ruido (footers, números sueltos, contenido vacío).
         """
         if not PPTX_AVAILABLE:
             logger.warning("python-pptx not available, returning None for PPTX file")
@@ -193,36 +229,76 @@ class RAGService:
             presentation = Presentation(io.BytesIO(pptx_bytes))
             logger.info(f"PPTX opened successfully, total slides: {len(presentation.slides)}")
             
-            text = ""
+            all_slide_texts = []
+            skipped_slides = 0
+            
             for slide_num, slide in enumerate(presentation.slides):
-                slide_text = ""
+                slide_title = ""
+                body_parts = []
                 
-                # Extraer texto de todas las formas (shapes) en el slide
                 for shape in slide.shapes:
-                    if hasattr(shape, "text") and shape.text:
+                    # Intentar detectar el título del slide
+                    if shape.has_text_frame:
                         shape_text = shape.text.strip()
-                        if shape_text:
-                            slide_text += shape_text + " "
+                        if not shape_text:
+                            continue
+                        
+                        # El placeholder de título suele ser el primero o tener placeholder_format
+                        is_title = False
+                        try:
+                            if hasattr(shape, 'placeholder_format') and shape.placeholder_format is not None:
+                                # placeholder idx 0 = título, idx 1 = subtítulo
+                                if shape.placeholder_format.idx in (0, 1):
+                                    is_title = True
+                        except Exception:
+                            pass
+                        
+                        if is_title and not slide_title:
+                            slide_title = shape_text
+                        else:
+                            body_parts.append(shape_text)
+                    elif hasattr(shape, "text") and shape.text and shape.text.strip():
+                        body_parts.append(shape.text.strip())
                     
                     # Si es una tabla, extraer su contenido
-                    if shape.shape_type == 14:  # 14 = MSO_SHAPE_TYPE.TABLE
+                    if shape.shape_type == 14:  # MSO_SHAPE_TYPE.TABLE
                         try:
                             table = shape.table
+                            table_rows = []
                             for row in table.rows:
-                                for cell in row.cells:
-                                    if cell.text.strip():
-                                        slide_text += cell.text.strip() + " "
+                                row_cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                                if row_cells:
+                                    table_rows.append(' | '.join(row_cells))
+                            if table_rows:
+                                body_parts.append('\n'.join(table_rows))
                         except Exception as e:
                             logger.warning(f"Could not extract table from slide {slide_num + 1}: {e}")
                 
-                if slide_text:
-                    logger.info(f"Slide {slide_num + 1}: extracted {len(slide_text)} chars")
-                    text += f"\n--- Slide {slide_num + 1} ---\n{slide_text}"
+                # Combinar y limpiar el contenido del slide
+                raw_body = '\n'.join(body_parts)
+                clean_body = self._clean_slide_text(raw_body)
+                clean_title = self._clean_slide_text(slide_title)
+                
+                # Solo incluir slides con contenido significativo (> 20 chars)
+                total_content = f"{clean_title} {clean_body}".strip()
+                if len(total_content) < 20:
+                    skipped_slides += 1
+                    continue
+                
+                # Formato: usar título del slide como encabezado semántico
+                if clean_title:
+                    slide_block = f"\n{clean_title}\n{clean_body}" if clean_body else f"\n{clean_title}"
                 else:
-                    logger.info(f"Slide {slide_num + 1}: no text found")
+                    slide_block = f"\n{clean_body}"
+                
+                all_slide_texts.append(slide_block)
             
-            final_text = text if text.strip() else "[PPTX vacío o sin contenido de texto]"
-            logger.info(f"PPTX extraction complete: total {len(final_text)} chars extracted")
+            if not all_slide_texts:
+                return "[PPTX vacío o sin contenido de texto]"
+            
+            final_text = '\n'.join(all_slide_texts)
+            logger.info(f"PPTX extraction complete: {len(all_slide_texts)} slides with content, "
+                       f"{skipped_slides} skipped, {len(final_text)} chars total")
             return final_text
         except Exception as e:
             logger.error(f"Error extracting PPTX text: {e}", exc_info=True)
@@ -553,11 +629,11 @@ class RAGService:
         Divide texto en chunks basándose en LÍMITES TEMÁTICOS.
         
         Algoritmo:
-        1. Dividir texto en oraciones
-        2. Calcular embedding de cada oración
-        3. Comparar similaridad coseno entre oraciones consecutivas
+        1. Dividir texto en segmentos (oraciones, bullets, párrafos)
+        2. Calcular embedding de cada segmento
+        3. Comparar similaridad coseno entre segmentos consecutivos
         4. Donde la similaridad baja del threshold → cortar (cambio de tema)
-        5. Agrupar oraciones en chunks respetando max_chunk_size
+        5. Agrupar segmentos en chunks respetando max_chunk_size
         
         Args:
             text: Texto completo a dividir
@@ -573,30 +649,48 @@ class RAGService:
         if len(text) <= max_chunk_size:
             return [text]
         
-        # 1. Dividir en oraciones
-        sentences = re.split(r'(?<=[.!?\n])\s+', text.strip())
-        sentences = [s.strip() for s in sentences if s.strip()]
+        # 1. Dividir en segmentos - manejar tanto oraciones como bullets/líneas de PPTX
+        # Primero separar por dobles saltos de línea (párrafos/slides), luego por oraciones
+        segments = []
+        paragraphs = re.split(r'\n{2,}', text.strip())
         
-        if len(sentences) <= 1:
-            # Si no se puede dividir en oraciones, fallback a sliding window
-            logger.info("[SEMANTIC] Solo 1 oración, fallback a sliding window")
+        for para in paragraphs:
+            para = para.strip()
+            if not para:
+                continue
+            
+            # Si el párrafo es corto (< 300 chars), mantenerlo como un segmento
+            if len(para) < 300:
+                segments.append(para)
+            else:
+                # Dividir por oraciones o saltos de línea
+                sub_segments = re.split(r'(?<=[.!?])\s+|\n', para)
+                for seg in sub_segments:
+                    seg = seg.strip()
+                    if seg and len(seg) > 10:  # Solo segmentos con contenido real
+                        segments.append(seg)
+        
+        # Filtrar segmentos vacíos o demasiado cortos
+        segments = [s for s in segments if s and len(s.strip()) > 10]
+        
+        if len(segments) <= 1:
+            logger.info("[SEMANTIC] Solo 1 segmento, fallback a sliding window")
             return self._chunk_text(text, chunk_size=1000, overlap=300)
         
-        logger.info(f"[SEMANTIC] {len(sentences)} oraciones detectadas")
+        logger.info(f"[SEMANTIC] {len(segments)} segmentos detectados")
         
-        # 2. Calcular embeddings de cada oración
+        # 2. Calcular embeddings de cada segmento
         try:
-            sentence_embeddings = self.embedding_model.encode(sentences)
+            sentence_embeddings = self.embedding_model.encode(segments)
         except Exception as e:
-            logger.error(f"[SEMANTIC] Error encoding sentences: {e}, fallback a sliding window")
+            logger.error(f"[SEMANTIC] Error encoding segments: {e}, fallback a sliding window")
             return self._chunk_text(text, chunk_size=1000, overlap=300)
         
-        # 3. Calcular similaridad coseno entre oraciones consecutivas
+        # 3. Calcular similaridad coseno entre segmentos consecutivos
         similarities = []
         for i in range(len(sentence_embeddings) - 1):
             a = sentence_embeddings[i]
             b = sentence_embeddings[i + 1]
-            # Cosine similarity
             cos_sim = np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10)
             similarities.append(float(cos_sim))
         
@@ -604,35 +698,35 @@ class RAGService:
         breakpoints = []
         for i, sim in enumerate(similarities):
             if sim < similarity_threshold:
-                breakpoints.append(i + 1)  # Cortar DESPUÉS de la oración i
+                breakpoints.append(i + 1)  # Cortar DESPUÉS del segmento i
         
         logger.info(f"[SEMANTIC] Similaridades: min={min(similarities):.3f}, max={max(similarities):.3f}, avg={sum(similarities)/len(similarities):.3f}")
         logger.info(f"[SEMANTIC] {len(breakpoints)} puntos de corte temático detectados (threshold={similarity_threshold})")
         
-        # 5. Agrupar oraciones en chunks
+        # 5. Agrupar segmentos en chunks
         chunks = []
-        current_chunk_sentences = []
+        current_chunk_parts = []
         current_length = 0
         
-        for i, sentence in enumerate(sentences):
-            # Si agregar esta oración excede el máximo, guardar chunk actual
-            if current_length + len(sentence) > max_chunk_size and current_chunk_sentences:
-                chunks.append(' '.join(current_chunk_sentences))
-                current_chunk_sentences = []
+        for i, segment in enumerate(segments):
+            # Si agregar este segmento excede el máximo, guardar chunk actual
+            if current_length + len(segment) > max_chunk_size and current_chunk_parts:
+                chunks.append('\n'.join(current_chunk_parts))
+                current_chunk_parts = []
                 current_length = 0
             
-            current_chunk_sentences.append(sentence)
-            current_length += len(sentence) + 1  # +1 por el espacio
+            current_chunk_parts.append(segment)
+            current_length += len(segment) + 1
             
             # Si estamos en un punto de corte temático, guardar chunk
-            if i in breakpoints and current_chunk_sentences:
-                chunks.append(' '.join(current_chunk_sentences))
-                current_chunk_sentences = []
+            if i in breakpoints and current_chunk_parts:
+                chunks.append('\n'.join(current_chunk_parts))
+                current_chunk_parts = []
                 current_length = 0
         
-        # No olvidar el último grupo de oraciones
-        if current_chunk_sentences:
-            chunks.append(' '.join(current_chunk_sentences))
+        # No olvidar el último grupo
+        if current_chunk_parts:
+            chunks.append('\n'.join(current_chunk_parts))
         
         # Garantizar al menos 1 chunk
         if not chunks:
@@ -1021,15 +1115,17 @@ class RAGService:
                 try:
                     collection = self.client.get_collection(collection_name)
                     total_docs = collection.count()
-                    logger.info(f"[RAG] Collection {collection_name}: {total_docs} docs, requesting top_k={top_k}")
+                    # Fetch more candidates for reranking with importance
+                    fetch_k = min(total_docs, max(top_k * 3, 15))
+                    logger.info(f"[RAG] Collection {collection_name}: {total_docs} docs, fetching {fetch_k} for reranking, final top_k={top_k}")
                     
                     results = collection.query(
                         query_texts=[query],
-                        n_results=min(top_k, total_docs),  # No pedir más de lo que hay
+                        n_results=fetch_k,
                         include=["documents", "metadatas", "distances"]
                     )
                     
-                    context_list = []
+                    candidates = []
                     if results['documents'] and results['documents'][0]:
                         for doc, metadata, distance in zip(
                             results['documents'][0],
@@ -1037,15 +1133,36 @@ class RAGService:
                             results['distances'][0]
                         ):
                             # ChromaDB cosine distance: 0 = idéntico, 2 = opuesto
-                            # Convertir a similitud [0, 1]: similarity = 1 - (distance / 2)
                             similarity = max(0, 1 - (distance / 2))
-                            context_list.append({
+                            
+                            # Recuperar importance_score de metadata
+                            try:
+                                importance = float(metadata.get('importance_score', 0.5))
+                            except (ValueError, TypeError):
+                                importance = 0.5
+                            
+                            # Score combinado: (1-w)*similarity + w*importance
+                            combined = (1 - importance_weight) * similarity + importance_weight * importance
+                            
+                            candidates.append({
                                 'content': doc,
                                 'metadata': metadata,
-                                'relevance_score': similarity
+                                'relevance_score': similarity,
+                                'importance_score': importance,
+                                'combined_score': combined
                             })
                     
-                    logger.info(f"[RAG] Retrieved {len(context_list)} chunks, distances: {results.get('distances', [[]])[0][:5]}")
+                    # Reranking por score combinado
+                    candidates.sort(key=lambda x: x['combined_score'], reverse=True)
+                    context_list = candidates[:top_k]
+                    
+                    # Add ranking metadata
+                    for i, item in enumerate(context_list):
+                        item['metadata'] = item['metadata'].copy()
+                        item['metadata']['importance_used'] = str(round(item['importance_score'], 3))
+                        item['metadata']['combined_score'] = str(round(item['combined_score'], 3))
+                    
+                    logger.info(f"[RAG] Retrieved {len(context_list)} chunks after reranking (importance_weight={importance_weight})")
                     debug_service.log_rag_search(query, module_id, len(context_list))
                     return context_list
                 except Exception as e:

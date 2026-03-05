@@ -556,8 +556,9 @@
         let currentFilter = null;
         let lastUpdateTime = new Date();
         let autoRefreshInterval;
-        let isRefreshing = false;  // Prevenir múltiples refresh simultáneos
-        let lastDataHash = '';      // Detectar cambios reales
+        let isRefreshing = false;
+        let lastDataHash = '';
+        let lastEventsHash = '';   // Detectar cambios en eventos
         
         function formatTime(isoString) {
             if (!isoString) return '-';
@@ -596,8 +597,6 @@
         }
         
         async function refreshEvents() {
-            if (isRefreshing) return;
-            
             try {
                 const url = currentFilter 
                     ? `/api/debug/events/?type=${currentFilter}&limit=100`
@@ -607,12 +606,16 @@
                 if (!response.ok) return;
                 const data = await response.json();
                 
-                const eventList = document.getElementById('event-list');
-                
                 if (!data.events || data.events.length === 0) {
-                    safeUpdateHTML('event-list', '<div style="padding: 20px; text-align: center; color: #999;">No hay eventos</div>');
+                    const emptyHTML = '<div style="padding: 20px; text-align: center; color: #999;">No hay eventos</div>';
+                    safeUpdateHTML('event-list', emptyHTML);
                     return;
                 }
+                
+                // Hash para detectar cambios reales
+                const newEventsHash = JSON.stringify(data.events.map(e => e.timestamp + e.message));
+                if (newEventsHash === lastEventsHash) return;
+                lastEventsHash = newEventsHash;
                 
                 let html = '';
                 data.events.reverse().forEach(event => {
@@ -644,8 +647,6 @@
         }
         
         async function refreshStats() {
-            if (isRefreshing) return;
-            
             try {
                 // Obtener stats de módulos (embeddings reales de BD)
                 const moduleResponse = await fetch('/api/modules/stats-all/');
@@ -758,20 +759,20 @@
             }
         }
         
-        // Autorefresh cada 5 segundos (no 2) - menos agresivo
+        // Autorefresh cada 8 segundos - no agresivo
         function startAutoRefresh() {
             autoRefreshInterval = setInterval(async () => {
                 if (isRefreshing) return;
                 isRefreshing = true;
                 try {
-                    await Promise.all([refreshEvents(), refreshStats()]);
-                    // Solo actualizar prompt flow si hubo cambio reciente
+                    await refreshStats();
+                    await refreshEvents();
                     await refreshPromptFlow();
                 } finally {
                     isRefreshing = false;
                 }
                 updateRefreshTimer();
-            }, 5000);  // Cada 5 segundos en lugar de 2
+            }, 8000);
         }
 
         async function refreshPromptFlow() {
