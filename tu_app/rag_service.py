@@ -180,8 +180,7 @@ class RAGService:
     # Patrones de ruido PPTX a eliminar (compilados una vez)
     _NOISE_PATTERNS = [
         re.compile(r'^\d{1,3}$'),                                          # Solo números (slide/página)
-        re.compile(r'^20[\dXx]{2}$'),                                      # "20XX", "2026", etc. solos
-        re.compile(r'^20[\dXx]{2}\s+', re.IGNORECASE),                     # "20XX Algo..." al inicio
+        re.compile(r'^20[\dXx]{2}$'),                                      # "20XX", "2026", etc. solos (sin más texto)
         re.compile(r'pie de p[aá]gina', re.IGNORECASE),                    # Cualquier mención de pie de página
         re.compile(r'ejemplo de texto', re.IGNORECASE),                    # Template placeholder text
         re.compile(r'^(?:©|\(c\)|copyright)\s*20', re.IGNORECASE),         # Copyright lines
@@ -299,7 +298,7 @@ class RAGService:
                         # Si es una tabla, convertir a Markdown
                         is_table = False
                         try:
-                            if shape.shape_type == 14:  # MSO_SHAPE_TYPE.TABLE
+                            if shape.has_table:  # Detectar tablas correctamente
                                 is_table = True
                                 md_table = self._table_to_markdown(shape.table)
                                 if md_table and len(md_table) > 10:
@@ -1011,20 +1010,13 @@ class RAGService:
                     # Cada chunk agrupa oraciones del mismo tema
                     if extracted:
                         # Usar chunking semántico: detecta límites temáticos
-                        raw_chunks = self._chunk_text_semantic(text, max_chunk_size=1500, similarity_threshold=0.45)
+                        raw_chunks = self._chunk_text_semantic(text, max_chunk_size=1000, similarity_threshold=0.45)
                         
-                        # Limpiar y filtrar chunks: eliminar ruido residual
-                        chunks = []
-                        for rc in raw_chunks:
-                            cleaned = self._clean_slide_text(rc)
-                            # Solo mantener chunks con contenido significativo (> 30 chars)
-                            if cleaned and len(cleaned.strip()) > 30:
-                                chunks.append(cleaned)
-                            else:
-                                logger.debug(f"  [FILTER] Descartando chunk basura: '{rc[:80]}...'")
+                        # Filtrar chunks vacíos (el texto ya fue limpiado durante extracción)
+                        chunks = [rc for rc in raw_chunks if rc and len(rc.strip()) > 15]
                         
                         if not chunks:
-                            logger.warning(f"  [FILTER] Todos los chunks descartados por ruido, usando título")
+                            logger.warning(f"  [FILTER] Todos los chunks descartados, usando título")
                             chunks = [text.split('\n')[0]]  # Usar solo título
                         
                         logger.info(f"  [CHUNKS] {len(text)} chars -> {len(raw_chunks)} raw -> {len(chunks)} clean chunks")
