@@ -1218,12 +1218,18 @@ class RAGService:
                 try:
                     collection = self.client.get_collection(collection_name)
                     total_docs = collection.count()
+                    if total_docs == 0:
+                        logger.warning(f"[RAG] Collection {collection_name} is empty (0 docs)")
+                        return []
                     # Fetch more candidates for reranking with importance
                     fetch_k = min(total_docs, max(top_k * 3, 15))
                     logger.info(f"[RAG] Collection {collection_name}: {total_docs} docs, fetching {fetch_k} for reranking, final top_k={top_k}")
                     
+                    # Encode query with OUR model (same used during analyze_module)
+                    query_embedding = self.embedding_model.encode(query).tolist()
+                    
                     results = collection.query(
-                        query_texts=[query],
+                        query_embeddings=[query_embedding],
                         n_results=fetch_k,
                         include=["documents", "metadatas", "distances"]
                     )
@@ -1269,8 +1275,8 @@ class RAGService:
                     debug_service.log_rag_search(query, module_id, len(context_list))
                     return context_list
                 except Exception as e:
-                    logger.warning(f"ChromaDB collection not found: {e}")
-                    debug_service.log_error("SEARCH", f"ChromaDB collection not found: {collection_name}", e)
+                    logger.error(f"[RAG] ChromaDB search error for {collection_name}: {type(e).__name__}: {e}", exc_info=True)
+                    debug_service.log_error("SEARCH", f"ChromaDB search error: {collection_name} - {e}", e)
                     return []
             else:
                 # Usar en memoria
