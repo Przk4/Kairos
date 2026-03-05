@@ -582,9 +582,27 @@ def chat_api(request):
                             import re as _re
                             clean_content = _re.sub(r'\n*---\s*Slide\s*\d+\s*---\n*', '\n', raw_content)
                             clean_content = _re.sub(r'\n*---\s*Página\s*\d+\s*---\n*', '\n', clean_content)
-                            clean_content = _re.sub(r'(?m)^20\d{2}\s+.*(?:pie de página|footer|ejemplo de texto).*$', '', clean_content, flags=_re.IGNORECASE)
-                            clean_content = _re.sub(r'(?m)^\d{1,3}\s*$', '', clean_content)
-                            clean_content = _re.sub(r'\n{3,}', '\n\n', clean_content).strip()
+                            # Limpiar cada línea de ruido PPTX
+                            clean_lines = []
+                            for _line in clean_content.split('\n'):
+                                _line = _line.strip()
+                                if not _line or len(_line) < 3:
+                                    continue
+                                if _re.match(r'^\d{1,3}$', _line):
+                                    continue
+                                if _re.match(r'^20[\dXx]{2}$', _line):
+                                    continue
+                                if _re.search(r'pie de p[aá]gina|ejemplo de texto|footer|placeholder|click to edit|haga clic', _line, _re.IGNORECASE):
+                                    continue
+                                if _re.match(r'^(?:©|\(c\)|copyright)\s*20', _line, _re.IGNORECASE):
+                                    continue
+                                clean_lines.append(_line)
+                            clean_content = '\n'.join(clean_lines).strip()
+                            
+                            # Descartar chunks que quedaron vacíos después de limpiar
+                            if not clean_content or len(clean_content) < 15:
+                                context_count -= 1
+                                continue
                             
                             embeddings_info.append({
                                 'rank': i + 1,

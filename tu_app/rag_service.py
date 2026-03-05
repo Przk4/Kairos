@@ -177,6 +177,20 @@ class RAGService:
             logger.error(f"Error extracting PDF text: {e}", exc_info=True)
             return f"[Error leyendo PDF: {str(e)[:100]}]"
     
+    # Patrones de ruido PPTX a eliminar (compilados una vez)
+    _NOISE_PATTERNS = [
+        re.compile(r'^\d{1,3}$'),                                          # Solo números (slide/página)
+        re.compile(r'^20[\dXx]{2}$'),                                      # "20XX", "2026", etc. solos
+        re.compile(r'^20[\dXx]{2}\s+', re.IGNORECASE),                     # "20XX Algo..." al inicio
+        re.compile(r'pie de p[aá]gina', re.IGNORECASE),                    # Cualquier mención de pie de página
+        re.compile(r'ejemplo de texto', re.IGNORECASE),                    # Template placeholder text
+        re.compile(r'^(?:©|\(c\)|copyright)\s*20', re.IGNORECASE),         # Copyright lines
+        re.compile(r'^footer\b', re.IGNORECASE),                           # Footer labels
+        re.compile(r'^(click to edit|haga clic|insert|placeholder)', re.IGNORECASE),  # Template instructions
+        re.compile(r'^(slide|diapositiva)\s*\d', re.IGNORECASE),           # "Slide 1" labels
+        re.compile(r'^\*+$'),                                              # Lines of only asterisks
+    ]
+
     def _clean_slide_text(self, text: str) -> str:
         """
         Limpia texto extraído de un slide eliminando ruido típico de PPTX.
@@ -192,20 +206,17 @@ class RAGService:
             if not line:
                 continue
             
-            # Eliminar líneas que son solo números (números de slide/página)
-            if re.match(r'^\d{1,3}$', line):
-                continue
-            
-            # Eliminar pies de página típicos: "20XX Ejemplo de Texto de pie de página NN"
-            if re.match(r'^20\d{2}\s+.*(?:pie de página|footer|example|ejemplo).*$', line, re.IGNORECASE):
-                continue
-            
-            # Eliminar líneas de copyright/footer genéricos
-            if re.match(r'^(?:©|\(c\)|copyright)\s*20\d{2}', line, re.IGNORECASE):
-                continue
-            
             # Eliminar líneas demasiado cortas que no aportan (< 3 chars)
             if len(line) < 3:
+                continue
+            
+            # Verificar contra todos los patrones de ruido
+            is_noise = False
+            for pattern in self._NOISE_PATTERNS:
+                if pattern.search(line):
+                    is_noise = True
+                    break
+            if is_noise:
                 continue
             
             cleaned_lines.append(line)
@@ -961,9 +972,23 @@ class RAGService:
                     # Cada chunk agrupa oraciones del mismo tema
                     if extracted:
                         # Usar chunking semántico: detecta límites temáticos
-                        chunks = self._chunk_text_semantic(text, max_chunk_size=1500, similarity_threshold=0.45)
+                        raw_chunks = self._chunk_text_semantic(text, max_chunk_size=1500, similarity_threshold=0.45)
                         
-                        logger.info(f"  [CHUNKS] {len(text)} chars -> {len(chunks)} semantic chunks")
+                        # Limpiar y filtrar chunks: eliminar ruido residual
+                        chunks = []
+                        for rc in raw_chunks:
+                            cleaned = self._clean_slide_text(rc)
+                            # Solo mantener chunks con contenido significativo (> 30 chars)
+                            if cleaned and len(cleaned.strip()) > 30:
+                                chunks.append(cleaned)
+                            else:
+                                logger.debug(f"  [FILTER] Descartando chunk basura: '{rc[:80]}...'")
+                        
+                        if not chunks:
+                            logger.warning(f"  [FILTER] Todos los chunks descartados por ruido, usando título")
+                            chunks = [text.split('\n')[0]]  # Usar solo título
+                        
+                        logger.info(f"  [CHUNKS] {len(text)} chars -> {len(raw_chunks)} raw -> {len(chunks)} clean chunks")
                         
                         # NUEVO: Calcular importancia de cada chunk
                         importance_scores = self._calculate_importance_batch(chunks, document_title=item.title)

@@ -558,7 +558,8 @@
         let autoRefreshInterval;
         let isRefreshing = false;
         let lastDataHash = '';
-        let lastEventsHash = '';   // Detectar cambios en eventos
+        let lastEventsHash = '';
+        let lastPromptTimestamp = '';  // Solo actualizar si hay datos más nuevos
         
         function formatTime(isoString) {
             if (!isoString) return '-';
@@ -781,21 +782,18 @@
                 if (!response.ok) return;
                 const data = await response.json();
                 
-                // Hash simple para detectar cambios
-                const newHash = JSON.stringify({
-                    q: data.last_question,
-                    count: data.retrieved_docs?.length,
-                    resp: data.deepseek_response?.substring(0, 50)
-                });
+                // CRITICAL: Con Gunicorn multi-worker, cada worker tiene datos distintos.
+                // Solo actualizar si el timestamp es más reciente que lo que ya tenemos.
+                const serverTimestamp = data.timestamp || '';
+                if (!serverTimestamp || serverTimestamp === '?') return;  // Sin datos válidos
+                if (!data.last_question || data.last_question === 'Sin pregunta registrada') return;  // Worker sin datos
                 
-                if (newHash === lastDataHash) return;  // Sin cambios, no actualizar
-                lastDataHash = newHash;
+                // Si ya tenemos datos más recientes, ignorar esta respuesta
+                if (lastPromptTimestamp && serverTimestamp <= lastPromptTimestamp) return;
+                lastPromptTimestamp = serverTimestamp;
                 
                 // Actualizar pregunta
-                if (data.last_question) {
-                    safeUpdate('prompt-question', data.last_question);
-                    document.getElementById('prompt-question')?.parentElement?.style.setProperty('border-left', '4px solid #4CAF50');
-                }
+                safeUpdate('prompt-question', data.last_question);
                 
                 // Actualizar información del QueryAnalyzer
                 if (data.query_analysis) {
@@ -804,19 +802,16 @@
                 }
                 
                 // Actualizar información de contexto RAG (CHUNKS RECUPERADOS)
-                const embeddingsList = document.getElementById('embeddings-list');
                 if (!data.retrieved_docs || data.retrieved_docs.length === 0) {
                     safeUpdateHTML('embeddings-list', '<div style="color: #999; font-size: 12px;">Sin documentos recuperados</div>');
                     safeUpdate('retrieved-count', '0');
                 } else {
-                    // Actualizar estadísticas
                     safeUpdate('retrieved-count', data.retrieved_docs.length);
                     if (data.retrieved_docs.length > 0) {
                         const minSimilarity = Math.min(...data.retrieved_docs.map(d => d.similarity || 0));
                         safeUpdate('min-similarity', (minSimilarity * 100).toFixed(1) + '%');
                     }
                     
-                    // Construir HTML
                     let html = `
                         <div style="background: rgba(76, 175, 80, 0.1); border: 1px solid #4CAF50; border-radius: 6px; padding: 12px; margin-bottom: 15px;">
                             <div style="color: #4CAF50; margin-bottom: 10px; font-weight: bold;">✓ Se recuperaron ${data.retrieved_docs.length} chunks (ordenados por similitud):</div>
@@ -849,7 +844,7 @@
                 }
                 
                 // Actualizar contexto completo (RAG_CONTEXT)
-                if (data.rag_context && data.rag_context.length > 0) {
+                if (data.rag_context && data.rag_context !== 'Sin contexto') {
                     const lines = data.rag_context.split('\n');
                     let contextHtml = '<div style="font-size: 11px; line-height: 1.6; color: #ddd;">';
                     lines.forEach(line => {
@@ -865,21 +860,22 @@
                 }
                 
                 // Actualizar System Prompt
-                if (data.system_prompt) {
+                if (data.system_prompt && data.system_prompt !== 'No disponible') {
                     safeUpdateHTML('system-prompt', `<div style="font-size: 12px; line-height: 1.6; color: #FF9800; white-space: pre-wrap;">${data.system_prompt}</div>`);
                 }
                 
                 // Actualizar Prompt Completo (User Message)
-                if (data.full_user_prompt) {
+                if (data.full_user_prompt && data.full_user_prompt !== 'No disponible') {
                     safeUpdateHTML('full-user-prompt', `<div style="font-size: 11px; line-height: 1.6; color: #E91E63;">${data.full_user_prompt.length} caracteres total</div><hr style="border-color: #333; margin: 10px 0;"><div style="font-size: 11px; line-height: 1.6; color: #ddd; white-space: pre-wrap;">${data.full_user_prompt}</div>`);
                 }
                 
                 // Actualizar respuesta DeepSeek
-                if (data.deepseek_response) {
+                if (data.deepseek_response && data.deepseek_response !== 'Sin respuesta registrada') {
                     safeUpdateHTML('deepseek-response', `<div style="font-size: 11px; line-height: 1.6; color: #CE93D8; white-space: pre-wrap;">${data.deepseek_response}</div>`);
                 }
             } catch (e) {
-                console.error('Error fetching prompt flow:', e);
+                // Silenciar errores de red - no modificar el DOM
+                console.debug('Prompt flow fetch skipped:', e.message);
             }
         }
         
