@@ -521,13 +521,22 @@ def chat_api(request):
         course = Course.objects.get(id=course_id, user=request.user)
         module = Module.objects.get(id=module_id, course=course) if module_id else None
         
-        # Guardamos la pregunta del estudiante
+        # Normalizar y limpiar la pregunta del estudiante antes de guardarla
+        try:
+            from textwrap import dedent
+            import re as _re
+            cleaned_question = dedent(question).strip()
+            cleaned_question = _re.sub(r'\n{3,}', '\n\n', cleaned_question)
+        except Exception:
+            cleaned_question = question.strip() if isinstance(question, str) else question
+
+        # Guardamos la pregunta del estudiante (limpia)
         student_message = ChatMessage.objects.create(
             user=request.user,
             course=course,
             module=module,
             role='student',
-            content=question
+            content=cleaned_question
         )
         
         try:
