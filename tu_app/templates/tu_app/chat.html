@@ -4,58 +4,120 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chat - {{ course.name }} | Kairos</title>
+    <!-- KaTeX for math formulas -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <!-- Highlight.js for code syntax -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f5f7fa; color: #333; }
-        
+
         .container { display: flex; height: 100vh; }
-        
+
         .sidebar { width: 25%; background: #fff; border-right: 1px solid #dee2e6; padding: 20px; overflow-y: auto; }
         .main-chat { width: 75%; display: flex; flex-direction: column; }
-        
+
         .header { background: #007bff; color: white; padding: 20px; display: flex; justify-content: space-between; align-items: center; }
         .header h1 { margin: 0; font-size: 1.5em; }
         .back-btn { background: rgba(255,255,255,0.2); color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; }
         .back-btn:hover { background: rgba(255,255,255,0.3); }
-        
+
         .chat-history { flex: 1; overflow-y: auto; padding: 20px; background: #f9f9f9; }
         .message { margin-bottom: 20px; display: flex; animation: slideIn 0.3s ease-in; }
-        
+
         @keyframes slideIn {
             from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }
         }
-        
+
         .message.student { justify-content: flex-end; }
         .message.ai { justify-content: flex-start; }
-        
-        .message-content { 
-            background: #007bff; 
-            color: white; 
-            padding: 14px 18px; 
-            border-radius: 12px; 
-            max-width: 70%; 
+
+        /* ===== Message bubble ===== */
+        .message-content {
+            padding: 14px 18px;
+            border-radius: 12px;
+            max-width: 75%;
             word-wrap: break-word;
-            line-height: 1.6;
-            font-size: 0.95em;
-            white-space: pre-wrap;
             overflow-wrap: anywhere;
-            tab-size: 4;
-            -moz-tab-size: 4;
-            /* Allow horizontal scroll for very wide content (tables/code) */
+            line-height: 1.65;
+            font-size: 0.95em;
+            color: #fff;
             overflow-x: auto;
         }
         .message.student .message-content { background: #28a745; }
-        .message.ai .message-content { background: #6c757d; }
-        
+        .message.ai .message-content { background: #495057; }
+
+        .msg-emoji { margin-right: 4px; }
+
+        /* ===== Rendered Markdown inside bubbles ===== */
+        .msg-text { white-space: normal; }
+        .msg-text p { margin: 0 0 0.6em 0; }
+        .msg-text p:last-child { margin-bottom: 0; }
+        .msg-text h1, .msg-text h2, .msg-text h3,
+        .msg-text h4, .msg-text h5, .msg-text h6 {
+            margin: 0.8em 0 0.4em 0; font-weight: 700; line-height: 1.3;
+        }
+        .msg-text h3 { font-size: 1.1em; }
+        .msg-text h4 { font-size: 1.0em; }
+        .msg-text ul, .msg-text ol { margin: 0.4em 0 0.6em 1.4em; padding: 0; }
+        .msg-text li { margin-bottom: 0.25em; }
+        .msg-text strong { font-weight: 700; }
+        .msg-text em { font-style: italic; }
+        .msg-text a { color: #8ecfff; text-decoration: underline; }
+        .msg-text hr { border: none; border-top: 1px solid rgba(255,255,255,0.2); margin: 0.8em 0; }
+
+        /* Blockquotes */
+        .msg-text blockquote {
+            border-left: 3px solid rgba(255,255,255,0.4);
+            margin: 0.5em 0; padding: 4px 12px;
+            background: rgba(255,255,255,0.06); border-radius: 4px;
+        }
+
+        /* Inline code */
+        .msg-text code:not([class]) {
+            background: rgba(0,0,0,0.25); padding: 2px 5px; border-radius: 3px;
+            font-family: 'Fira Code', 'Consolas', monospace; font-size: 0.9em;
+        }
+
+        /* Code blocks */
+        .msg-text pre {
+            background: #1e1e2e !important; color: #cdd6f4;
+            padding: 12px 14px; border-radius: 8px;
+            overflow-x: auto; margin: 0.6em 0;
+            font-size: 0.88em; line-height: 1.5;
+            white-space: pre;
+        }
+        .msg-text pre code { background: none !important; padding: 0; font-size: inherit; color: inherit; }
+
+        /* Tables */
+        .msg-text .table-wrap { overflow-x: auto; margin: 0.6em 0; border-radius: 6px; }
+        .msg-text table {
+            width: 100%; border-collapse: collapse; font-size: 0.9em;
+            background: rgba(255,255,255,0.06);
+        }
+        .msg-text th, .msg-text td {
+            border: 1px solid rgba(255,255,255,0.15);
+            padding: 7px 10px; text-align: left; vertical-align: top;
+        }
+        .msg-text th { background: rgba(255,255,255,0.1); font-weight: 700; }
+        .msg-text tr:nth-child(even) { background: rgba(255,255,255,0.04); }
+
+        /* Images */
+        .msg-text img { max-width: 100%; border-radius: 6px; margin: 0.4em 0; }
+
+        /* KaTeX overrides inside bubbles */
+        .msg-text .katex-display { margin: 0.6em 0; overflow-x: auto; overflow-y: hidden; }
+        .msg-text .katex { font-size: 1.05em; color: #fff; }
+
         .message-time { font-size: 0.75em; color: #999; margin-top: 5px; padding: 0 5px; }
-        
+
         .input-area { padding: 20px; background: #fff; border-top: 1px solid #dee2e6; display: flex; gap: 10px; }
         .input-area input { flex: 1; padding: 12px; border: 1px solid #dee2e6; border-radius: 5px; font-size: 1em; }
         .input-area button { background: #007bff; color: white; border: none; padding: 12px 20px; border-radius: 5px; cursor: pointer; font-weight: bold; }
         .input-area button:hover { opacity: 0.9; }
         .input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
-        
+
         .sidebar h3 { color: #007bff; margin-bottom: 15px; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
         .module-list { list-style: none; }
         .module-list li { padding: 10px; background: #f8f9fa; margin-bottom: 8px; border-radius: 5px; cursor: pointer; transition: all 0.3s; color: #333; }
@@ -64,22 +126,22 @@
         .module-list li.active:hover { background: #0056b3; }
         .module-list li.active span { color: white; }
         .module-list li.active strong { color: white; }
-        
+
         .module-info { background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
         .module-info h4 { color: #0056b3; margin-bottom: 10px; }
         .module-status { font-size: 0.9em; color: #6c757d; }
-        
+
         .loading { text-align: center; padding: 20px; color: #999; }
         .typing-indicator { display: flex; gap: 4px; }
         .typing-indicator span { width: 8px; height: 8px; background: #999; border-radius: 50%; animation: bounce 1.4s infinite; }
         .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
         .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
-        
+
         @keyframes bounce {
             0%, 80%, 100% { opacity: 0.3; }
             40% { opacity: 1; }
         }
-        
+
         .no-modules { color: #999; text-align: center; padding: 20px; }
     </style>
 </head>
@@ -171,60 +233,154 @@
 
     {% csrf_token %}
 
-
+    <!-- Libraries: Markdown, Sanitizer, Math, Code Highlighting -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@5.0.2/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@2.4.0/dist/purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 
     <script>
+    // ===================================================================
+    //  MARKDOWN RENDERER — shared by history + new messages
+    // ===================================================================
+    (function setupMarked() {
+        if (!window.marked) return;
+
+        // Custom renderer to wrap tables in a scroll container
+        const renderer = new marked.Renderer();
+        const origTable = renderer.table.bind(renderer);
+        renderer.table = function(header, body) {
+            const html = origTable(header, body);
+            return '<div class="table-wrap">' + html + '</div>';
+        };
+
+        marked.setOptions({
+            renderer: renderer,
+            breaks: true,       // \n → <br>
+            gfm: true,          // GitHub-flavored markdown (tables, strikethrough…)
+            headerIds: false,
+            mangle: false,
+            highlight: function(code, lang) {
+                if (window.hljs && lang && hljs.getLanguage(lang)) {
+                    return hljs.highlight(code, { language: lang }).value;
+                }
+                return code;
+            }
+        });
+    })();
+
+    /**
+     * Render raw text to safe HTML:
+     *  1. Markdown → HTML (via marked)
+     *  2. Sanitize (via DOMPurify — allows class for highlight spans)
+     *  3. KaTeX: render $…$ and $$…$$ formulas
+     *  4. highlight.js: highlight un-tagged code blocks
+     */
+    function renderMarkdown(rawText) {
+        if (!rawText) return '';
+        let text = rawText;
+
+        // --- Step 1: Markdown → HTML ---
+        let html;
+        try {
+            html = window.marked.parse(text);
+        } catch (e) {
+            console.warn('marked.parse failed', e);
+            html = text.replace(/</g, '&lt;').replace(/\n/g, '<br>');
+        }
+
+        // --- Step 2: Sanitize ---
+        try {
+            html = window.DOMPurify.sanitize(html, {
+                ALLOWED_TAGS: [
+                    'p','br','strong','b','em','i','u','s','del',
+                    'h1','h2','h3','h4','h5','h6',
+                    'ul','ol','li',
+                    'blockquote','hr',
+                    'pre','code','span',
+                    'table','thead','tbody','tr','th','td',
+                    'a','img',
+                    'div','sub','sup'
+                ],
+                ALLOWED_ATTR: ['href','title','target','src','alt','class','style'],
+                ALLOW_DATA_ATTR: false
+            });
+        } catch (e) {
+            console.warn('DOMPurify failed', e);
+        }
+
+        return html;
+    }
+
+    /**
+     * Post-process a DOM element: KaTeX + highlight.js
+     */
+    function postProcessElement(el) {
+        // KaTeX: render LaTeX formulas ($...$, $$...$$, \(...\), \[...\])
+        if (window.renderMathInElement) {
+            try {
+                renderMathInElement(el, {
+                    delimiters: [
+                        { left: '$$', right: '$$', display: true },
+                        { left: '$',  right: '$',  display: false },
+                        { left: '\\[', right: '\\]', display: true },
+                        { left: '\\(', right: '\\)', display: false }
+                    ],
+                    throwOnError: false
+                });
+            } catch (e) { console.warn('KaTeX failed', e); }
+        }
+        // Highlight.js: highlight code blocks that marked didn't tag
+        if (window.hljs) {
+            el.querySelectorAll('pre code:not(.hljs)').forEach(block => {
+                try { hljs.highlightElement(block); } catch (e) {}
+            });
+        }
+    }
+
+    // ===================================================================
+    //  INIT: Render existing history messages on page load
+    // ===================================================================
     let currentModuleId = null;
     const courseId = {{ course.id }};
     let moduleRefreshIntervals = {};
 
-    // ========== SINCRONIZACIÓN DE ESTADO ==========
-    // Al cargar la página, sincronizar estado de TODOS los módulos
     document.addEventListener('DOMContentLoaded', function() {
-        console.log('[CHAT] Initializing module status sync');
-        
-        const moduleItems = document.querySelectorAll('.module-list li');
-        moduleItems.forEach(li => {
-            // Saltar "Todos los módulos"
+        // Render all existing messages
+        document.querySelectorAll('.msg-text').forEach(el => {
+            const raw = el.textContent || '';
+            el.innerHTML = renderMarkdown(raw);
+            postProcessElement(el);
+        });
+
+        // Module status sync
+        document.querySelectorAll('.module-list li').forEach(li => {
             if (li.textContent.includes('Todos los módulos')) return;
-            
-            // Extraer ID del módulo del atributo onclick
             const onclickAttr = li.getAttribute('onclick');
-            const match = onclickAttr.match(/selectModule\(this,\s*(\d+)\)/);
+            const match = onclickAttr && onclickAttr.match(/selectModule\(this,\s*(\d+)\)/);
             if (match) {
                 const moduleId = match[1];
-                // Sincronizar estado (solo actualiza texto, no colores)
                 syncModuleStatusText(moduleId, li);
-                // Auto-refresh cada 10 segundos
-                moduleRefreshIntervals[moduleId] = setInterval(() => {
-                    syncModuleStatusText(moduleId, li);
-                }, 10000);
+                moduleRefreshIntervals[moduleId] = setInterval(() => syncModuleStatusText(moduleId, li), 10000);
             }
         });
     });
 
-    /**
-     * Sincroniza el texto de estado del módulo (sin cambiar colores)
-     * Los colores los controla CSS: .active { azul }, default { gris }
-     */
+    // ===================================================================
+    //  MODULE STATUS SYNC
+    // ===================================================================
     async function syncModuleStatusText(moduleId, listElement) {
         try {
             const response = await fetch(`/api/module/${moduleId}/analysis-status/`);
             const data = await response.json();
-            
-            // Buscar o crear span de estado
             let statusSpan = listElement.querySelector('.module-state-badge');
             if (!statusSpan) {
                 statusSpan = document.createElement('span');
                 statusSpan.className = 'module-state-badge';
-                statusSpan.style.display = 'block';
-                statusSpan.style.fontSize = '0.8em';
-                statusSpan.style.opacity = '0.8';
-                statusSpan.style.marginTop = '2px';
+                statusSpan.style.cssText = 'display:block;font-size:0.8em;opacity:0.8;margin-top:2px;';
                 listElement.appendChild(statusSpan);
             }
-            
-            // Actualizar texto de estado sin tocar colores
             if (data.is_analyzed) {
                 statusSpan.textContent = '✅ Vectores guardados';
                 statusSpan.style.color = '#28a745';
@@ -237,69 +393,18 @@
         }
     }
 
-    // ========== Render Markdown safely for message text ==========
-    document.addEventListener('DOMContentLoaded', function() {
-        // Load marked + DOMPurify via CDN dynamically
-        const scripts = [
-            'https://unpkg.com/marked@5.0.2/marked.min.js',
-            'https://unpkg.com/dompurify@2.4.0/dist/purify.min.js'
-        ];
-
-        function loadScript(src) {
-            return new Promise((resolve, reject) => {
-                const s = document.createElement('script');
-                s.src = src;
-                s.onload = resolve;
-                s.onerror = reject;
-                document.head.appendChild(s);
-            });
-        }
-
-        Promise.all(scripts.map(loadScript)).then(() => {
-            document.querySelectorAll('.msg-text').forEach(el => {
-                try {
-                    const txt = el.textContent || '';
-                    // Convert markdown -> HTML, then sanitize
-                    const raw = window.marked.parse(txt || '');
-                    const clean = window.DOMPurify.sanitize(raw, {ALLOWED_ATTR: ['href', 'title', 'target']});
-                    el.innerHTML = clean;
-                } catch (e) {
-                    // fallback: leave plain text
-                    console.warn('Markdown render failed', e);
-                }
-            });
-            // Make tables responsive inside message-content
-            document.querySelectorAll('.message-content table').forEach(tbl => {
-                tbl.style.width = '100%';
-                tbl.style.borderCollapse = 'collapse';
-                tbl.querySelectorAll('th, td').forEach(cell => {
-                    cell.style.border = '1px solid rgba(255,255,255,0.15)';
-                    cell.style.padding = '6px 8px';
-                });
-                // Wrap table in a scroll container if necessary
-                const wrapper = document.createElement('div');
-                wrapper.style.overflowX = 'auto';
-                wrapper.style.marginTop = '8px';
-                tbl.parentNode.insertBefore(wrapper, tbl);
-                wrapper.appendChild(tbl);
-            });
-        }).catch(err => console.warn('Could not load markdown renderer', err));
-    });
-
-    // ========== SELECCIÓN DE MÓDULO ==========
-    // Seleccionar/deseleccionar módulo (agrega/quita clase .active)
+    // ===================================================================
+    //  MODULE SELECTION
+    // ===================================================================
     function selectModule(element, moduleId) {
         currentModuleId = moduleId;
-        // Remover .active de todos
-        document.querySelectorAll('.module-list li').forEach(li => {
-            li.classList.remove('active');
-        });
-        // Agregar .active al seleccionado (CSS lo pone azul)
+        document.querySelectorAll('.module-list li').forEach(li => li.classList.remove('active'));
         element.classList.add('active');
     }
 
-    // ========== UTILIDADES ==========
-    // Obtener token CSRF desde Django
+    // ===================================================================
+    //  CHAT
+    // ===================================================================
     function getCSRFToken() {
         let token = document.querySelector('[name=csrfmiddlewaretoken]');
         if (token) return token.value;
@@ -308,122 +413,82 @@
         return '';
     }
 
-    // ========== CHAT ==========
-    // Enviar pregunta
     function sendQuestion() {
-        const question = document.getElementById('questionInput').value.trim();
-        
-        if (!question) {
-            alert('Por favor escribe una pregunta');
-            return;
-        }
+        const input = document.getElementById('questionInput');
+        const question = input.value.trim();
+        if (!question) { alert('Por favor escribe una pregunta'); return; }
 
-        // Mostrar indicador de escritura
         document.getElementById('typingIndicator').style.display = 'block';
         document.getElementById('sendBtn').disabled = true;
-        document.getElementById('questionInput').disabled = true;
+        input.disabled = true;
 
-        // Agregar mensaje del estudiante al chat
         addMessageToChat(question, 'student');
-        document.getElementById('questionInput').value = '';
+        input.value = '';
 
-        // Enviar al servidor
         fetch('/api/chat/', {
             method: 'POST',
-            headers: {
-                'X-CSRFToken': getCSRFToken(),
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                question: question,
-                course_id: courseId,
-                module_id: currentModuleId
-            })
+            headers: { 'X-CSRFToken': getCSRFToken(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question, course_id: courseId, module_id: currentModuleId })
         })
-        .then(response => response.json())
+        .then(r => r.json())
         .then(data => {
             document.getElementById('typingIndicator').style.display = 'none';
-            
             if (data.success) {
                 addMessageToChat(data.response, 'ai');
-                
-                // Mostrar estadísticas
                 console.log(`Tokens: ${data.tokens_used}, Tiempo: ${data.processing_time}s`);
             } else {
-                addMessageToChat(`❌ Error: ${data.error || 'Error desconocido'}`, 'ai');
+                addMessageToChat(`Error: ${data.error || 'Error desconocido'}`, 'ai');
             }
         })
         .catch(error => {
             document.getElementById('typingIndicator').style.display = 'none';
-            addMessageToChat(`❌ Error de conexión: ${error.message}`, 'ai');
-            console.error('Error:', error);
+            addMessageToChat(`Error de conexión: ${error.message}`, 'ai');
         })
         .finally(() => {
             document.getElementById('sendBtn').disabled = false;
-            document.getElementById('questionInput').disabled = false;
-            document.getElementById('questionInput').focus();
+            input.disabled = false;
+            input.focus();
         });
     }
 
-    /**
-     * Agregar mensaje al chat
-     */
     function addMessageToChat(content, role) {
         const chatHistory = document.getElementById('chatHistory');
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${role}`;
-        
+
         const now = new Date();
         const timeStr = now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-        
-        // Procesar contenido para preservar saltos de línea
-        const formattedContent = escapeHtml(content).replace(/\n/g, '<br>');
-        
+
+        const emoji = role === 'ai' ? '🤖' : '👤';
+        const rendered = renderMarkdown(content);
+
         messageDiv.innerHTML = `
             <div>
-                <div class="message-content" style="white-space: pre-wrap;">
-                    ${role === 'ai' ? '🤖' : '👤'} ${formattedContent}
+                <div class="message-content">
+                    <span class="msg-emoji">${emoji}</span>
+                    <span class="msg-text">${rendered}</span>
                 </div>
                 <div class="message-time">${timeStr}</div>
             </div>
         `;
-        
+
         chatHistory.appendChild(messageDiv);
+
+        // Post-process: KaTeX + highlight.js
+        const textEl = messageDiv.querySelector('.msg-text');
+        if (textEl) postProcessElement(textEl);
+
         chatHistory.scrollTop = chatHistory.scrollHeight;
     }
 
-    /**
-     * Escape HTML para evitar XSS
-     */
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-    /**
-     * Manejar Enter en el input
-     */
     function handleKeyPress(event) {
-        if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault();
-            sendQuestion();
-        }
+        if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendQuestion(); }
     }
 
-    /**
-     * Volver a la página anterior
-     */
-    function goBack() {
-        window.history.back();
-    }
+    function goBack() { window.history.back(); }
 
-    /**
-     * Auto-scroll al cargar la página
-     */
     window.addEventListener('load', () => {
-        const chatHistory = document.getElementById('chatHistory');
-        chatHistory.scrollTop = chatHistory.scrollHeight;
+        document.getElementById('chatHistory').scrollTop = document.getElementById('chatHistory').scrollHeight;
     });
     </script>
 </body>
