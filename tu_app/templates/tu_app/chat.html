@@ -135,14 +135,7 @@
                     {% for message in chat_history %}
                         <div class="message {{ message.role }}">
                             <div>
-                                <div class="message-content">
-                                    {% if message.role == 'ai' %}
-                                        🤖 
-                                    {% else %}
-                                        👤 
-                                    {% endif %}
-                                    {{ message.content }}
-                                </div>
+                                <div class="message-content">{% if message.role == 'ai' %}🤖{% else %}👤{% endif %} {{ message.content }}</div>
                                 <div class="message-time">{{ message.created_at|date:"H:i" }}</div>
                             </div>
                         </div>
