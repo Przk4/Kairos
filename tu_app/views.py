@@ -549,6 +549,7 @@ def chat_api(request):
                     top_k=optimal_fragments,
                     query_type=query_type  # NUEVO: Para ranking jerárquico
                 )
+                logger.info(f"[CHAT] Searched module {module.id}: requested={optimal_fragments}, got={len(context)}")
             else:
                 # Buscar en todos los módulos del curso
                 # Dividir fragmentos entre módulos
@@ -561,6 +562,7 @@ def chat_api(request):
                         query_type=query_type  # NUEVO: Para ranking jerárquico
                     )
                     context.extend(mod_context)
+                logger.info(f"[CHAT] Searched {course.modules.count()} modules: requested={optimal_fragments}, per_module={fragments_per_module}, got={len(context)}")
             
             # Extraer información de embeddings para debug
             embeddings_info = []
@@ -598,7 +600,8 @@ def chat_api(request):
                 'question': question,
                 'question_length': len(question),
                 'query_analysis': query_analysis,  # NUEVO: Análisis inteligente de pregunta
-                'retrieved_count': context_count,
+                'requested_chunks': optimal_fragments,  # NUEVO: Cuántos se solicitaron
+                'retrieved_count': context_count,  # Cuántos se recibieron
                 'retrieved_docs': embeddings_info,
                 'context': context_text,  # SIN TRUNCAR - completo
                 'system_prompt': system_prompt,
@@ -1280,11 +1283,16 @@ def debug_prompt_flow(request):
     """
     global _last_prompt_flow
     
+    # Incluir info del query_analysis si está disponible
+    query_analysis = _last_prompt_flow.get('query_analysis', {})
+    
     return JsonResponse({
         'status': 'ok',
         'last_question': _last_prompt_flow.get('question') or 'Sin pregunta registrada',
         'question_length': _last_prompt_flow.get('question_length', 0),
-        'retrieved_count': _last_prompt_flow.get('retrieved_count', 0),
+        'query_type': query_analysis.get('query_type', 'unknown'),
+        'requested_chunks': _last_prompt_flow.get('requested_chunks', 5),  # Cuántos se solicitaron
+        'retrieved_count': _last_prompt_flow.get('retrieved_count', 0),   # Cuántos llegaron
         'retrieved_docs': _last_prompt_flow.get('retrieved_docs', []),
         'rag_context': _last_prompt_flow.get('context') or 'Sin contexto',
         'system_prompt': _last_prompt_flow.get('system_prompt') or 'No disponible',

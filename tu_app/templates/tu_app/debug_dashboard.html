@@ -509,9 +509,13 @@
                     <div style="color: #4CAF50; margin-bottom: 8px;">
                         <strong>📊 Resumen del Filtrado RAG:</strong>
                     </div>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; color: #ddd;">
-                        <div>Chunks Recuperados: <span id="retrieved-count" style="color: #4CAF50; font-weight: bold;">0</span></div>
-                        <div>Similitud Mínima: <span id="min-similarity" style="color: #4CAF50; font-weight: bold;">-</span></div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; color: #ddd;">
+                        <div>Tipo: <span id="query-type" style="color: #FF9800; font-weight: bold;">-</span></div>
+                        <div>Solicitados: <span id="requested-count" style="color: #2196F3; font-weight: bold;">-</span></div>
+                        <div>Recuperados: <span id="retrieved-count" style="color: #4CAF50; font-weight: bold;">0</span></div>
+                    </div>
+                    <div style="margin-top: 8px; color: #ddd;">
+                        Similitud Mínima: <span id="min-similarity" style="color: #4CAF50; font-weight: bold;">-</span>
                     </div>
                 </div>
                 
@@ -552,34 +556,61 @@
         let currentFilter = null;
         let lastUpdateTime = new Date();
         let autoRefreshInterval;
+        let isRefreshing = false;  // Prevenir múltiples refresh simultáneos
+        let lastDataHash = '';      // Detectar cambios reales
         
         function formatTime(isoString) {
-            const date = new Date(isoString);
-            return date.toLocaleTimeString('es-ES', { 
-                hour: '2-digit', 
-                minute: '2-digit', 
-                second: '2-digit' 
-            });
+            if (!isoString) return '-';
+            try {
+                const date = new Date(isoString);
+                return date.toLocaleTimeString('es-ES', { 
+                    hour: '2-digit', 
+                    minute: '2-digit', 
+                    second: '2-digit' 
+                });
+            } catch(e) {
+                return '-';
+            }
         }
         
         function formatDuration(ms) {
+            if (!ms || isNaN(ms)) return '-';
             if (ms < 1000) return ms.toFixed(0) + 'ms';
             return (ms / 1000).toFixed(2) + 's';
         }
         
+        // Actualizar texto solo si cambió (evita parpadeo)
+        function safeUpdate(elementId, newValue) {
+            const el = document.getElementById(elementId);
+            if (el && el.textContent !== String(newValue)) {
+                el.textContent = newValue;
+            }
+        }
+        
+        // Actualizar HTML solo si cambió
+        function safeUpdateHTML(elementId, newHTML) {
+            const el = document.getElementById(elementId);
+            if (el && el.innerHTML !== newHTML) {
+                el.innerHTML = newHTML;
+            }
+        }
+        
         async function refreshEvents() {
+            if (isRefreshing) return;
+            
             try {
                 const url = currentFilter 
                     ? `/api/debug/events/?type=${currentFilter}&limit=100`
                     : '/api/debug/events/?limit=100';
                 
                 const response = await fetch(url);
+                if (!response.ok) return;
                 const data = await response.json();
                 
                 const eventList = document.getElementById('event-list');
                 
                 if (!data.events || data.events.length === 0) {
-                    eventList.innerHTML = '<div style="padding: 20px; text-align: center; color: #999;">No hay eventos</div>';
+                    safeUpdateHTML('event-list', '<div style="padding: 20px; text-align: center; color: #999;">No hay eventos</div>');
                     return;
                 }
                 
@@ -604,59 +635,55 @@
                     `;
                 });
                 
-                eventList.innerHTML = html;
+                safeUpdateHTML('event-list', html);
                 lastUpdateTime = new Date();
-                updateRefreshTimer();
                 
             } catch (e) {
                 console.error('Error fetching events:', e);
-                document.getElementById('event-list').innerHTML = 
-                    '<div style="padding: 20px; color: #f44336;">Error al cargar eventos</div>';
             }
         }
         
         async function refreshStats() {
+            if (isRefreshing) return;
+            
             try {
-                console.log('[Dashboard] Fetching /api/modules/stats-all/...');
-                
                 // Obtener stats de módulos (embeddings reales de BD)
                 const moduleResponse = await fetch('/api/modules/stats-all/');
+                if (!moduleResponse.ok) return;
                 const moduleData = await moduleResponse.json();
-                
-                console.log('[Dashboard] ModuleResponse:', moduleData);
                 
                 // Actualizar stats de módulos - USAR DATOS DE BD siempre
                 const totalEmbeddings = moduleData.total_embeddings || 0;
                 const totalModules = moduleData.total_modules || 0;
                 
-                document.getElementById('rag-modules').textContent = totalModules;
-                document.getElementById('rag-embeddings').textContent = totalEmbeddings;
-                document.getElementById('rag-last').textContent = moduleData.timestamp || new Date().toLocaleString();
-                
-                console.log(`[Dashboard] Updated: rag-modules=${totalModules}, rag-embeddings=${totalEmbeddings}`);
+                safeUpdate('rag-modules', totalModules);
+                safeUpdate('rag-embeddings', totalEmbeddings);
+                safeUpdate('rag-last', moduleData.timestamp || '-');
                 
                 // También obtener stats de debug (para DeepSeek, eventos, etc.)
                 const debugResponse = await fetch('/api/debug/stats/');
+                if (!debugResponse.ok) return;
                 const debugData = await debugResponse.json();
                 
-                console.log('[Dashboard] DebugResponse:', debugData);
-                
                 // Actualizar stats DeepSeek
-                document.getElementById('deepseek-calls').textContent = debugData.deepseek.total_calls;
-                document.getElementById('deepseek-tokens').textContent = debugData.deepseek.total_tokens;
-                document.getElementById('deepseek-time').textContent = 
-                    formatDuration(debugData.deepseek.avg_response_time);
+                safeUpdate('deepseek-calls', debugData.deepseek?.total_calls || 0);
+                safeUpdate('deepseek-tokens', debugData.deepseek?.total_tokens || 0);
+                safeUpdate('deepseek-time', formatDuration(debugData.deepseek?.avg_response_time));
                 
                 // Actualizar contadores de eventos
-                document.getElementById('total-events').textContent = debugData.event_counts.RAG + 
-                    debugData.event_counts.DEEPSEEK + debugData.event_counts.EMBEDDING + debugData.event_counts.ERROR;
-                document.getElementById('count-rag').textContent = debugData.event_counts.RAG;
-                document.getElementById('count-deepseek').textContent = debugData.event_counts.DEEPSEEK;
-                document.getElementById('count-embed').textContent = debugData.event_counts.EMBEDDING;
-                document.getElementById('count-errors').textContent = debugData.event_counts.ERROR;
+                const eventCounts = debugData.event_counts || {};
+                const totalEvents = (eventCounts.RAG || 0) + (eventCounts.DEEPSEEK || 0) + 
+                                   (eventCounts.EMBEDDING || 0) + (eventCounts.ERROR || 0);
+                safeUpdate('total-events', totalEvents);
+                safeUpdate('count-rag', eventCounts.RAG || 0);
+                safeUpdate('count-deepseek', eventCounts.DEEPSEEK || 0);
+                safeUpdate('count-embed', eventCounts.EMBEDDING || 0);
+                safeUpdate('count-errors', eventCounts.ERROR || 0);
                 
                 // Actualizar base de datos en memoria
-                updateMemoryDB(debugData.memory_db);
+                if (debugData.memory_db) {
+                    updateMemoryDB(debugData.memory_db);
+                }
                 
             } catch (e) {
                 console.error('[Dashboard] Error fetching stats:', e);
@@ -667,7 +694,7 @@
             const container = document.getElementById('memory-db');
             
             if (!memoryDB.collections || Object.keys(memoryDB.collections).length === 0) {
-                container.innerHTML = '<div style="padding: 20px; text-align: center; color: #999;">Sin colecciones</div>';
+                safeUpdateHTML('memory-db', '<div style="padding: 20px; text-align: center; color: #999;">Sin colecciones</div>');
                 return;
             }
             
@@ -686,13 +713,13 @@
                     </div>
                 `;
             }
-            container.innerHTML = html;
+            safeUpdateHTML('memory-db', html);
         }
         
         function updateRefreshTimer() {
             const now = new Date();
             const diff = Math.floor((now - lastUpdateTime) / 1000);
-            document.getElementById('refresh-timer').textContent = `Última actualización: hace ${diff}s`;
+            safeUpdate('refresh-timer', `Última actualización: hace ${diff}s`);
         }
         
         function filterEvents(type) {
@@ -709,7 +736,6 @@
         
         async function clearEvents() {
             if (confirm('¿Limpiar todos los eventos?')) {
-                // En una versión futura, agregar endpoint para limpiar
                 alert('Esta función requiere un endpoint adicional');
             }
         }
@@ -720,7 +746,6 @@
                 const data = await response.json();
                 
                 if (data.status === 'ok') {
-                    // Refrescar inmediatamente después de generar datos
                     await new Promise(resolve => setTimeout(resolve, 300));
                     refreshPromptFlow();
                     alert(`✅ Datos de prueba generados: ${data.docs_count} chunks`);
@@ -733,76 +758,96 @@
             }
         }
         
-        // Autorefresh cada 2 segundos
+        // Autorefresh cada 5 segundos (no 2) - menos agresivo
         function startAutoRefresh() {
-            autoRefreshInterval = setInterval(() => {
-                refreshEvents();
-                refreshStats();
-                refreshPromptFlow();
+            autoRefreshInterval = setInterval(async () => {
+                if (isRefreshing) return;
+                isRefreshing = true;
+                try {
+                    await Promise.all([refreshEvents(), refreshStats()]);
+                    // Solo actualizar prompt flow si hubo cambio reciente
+                    await refreshPromptFlow();
+                } finally {
+                    isRefreshing = false;
+                }
                 updateRefreshTimer();
-            }, 2000);
+            }, 5000);  // Cada 5 segundos en lugar de 2
         }
 
         async function refreshPromptFlow() {
             try {
                 const response = await fetch('/api/debug/prompt-flow/');
+                if (!response.ok) return;
                 const data = await response.json();
                 
+                // Hash simple para detectar cambios
+                const newHash = JSON.stringify({
+                    q: data.last_question,
+                    count: data.retrieved_docs?.length,
+                    resp: data.deepseek_response?.substring(0, 50)
+                });
+                
+                if (newHash === lastDataHash) return;  // Sin cambios, no actualizar
+                lastDataHash = newHash;
+                
                 // Actualizar pregunta
-                const questionDiv = document.getElementById('prompt-question');
-                questionDiv.textContent = data.last_question || 'Esperando pregunta...';
                 if (data.last_question) {
-                    questionDiv.parentElement.style.borderLeft = '4px solid #4CAF50';
+                    safeUpdate('prompt-question', data.last_question);
+                    document.getElementById('prompt-question')?.parentElement?.style.setProperty('border-left', '4px solid #4CAF50');
+                }
+                
+                // Actualizar información del QueryAnalyzer
+                if (data.query_analysis) {
+                    safeUpdate('query-type', data.query_analysis.type || '-');
+                    safeUpdate('requested-count', data.query_analysis.requested_chunks || '-');
                 }
                 
                 // Actualizar información de contexto RAG (CHUNKS RECUPERADOS)
                 const embeddingsList = document.getElementById('embeddings-list');
                 if (!data.retrieved_docs || data.retrieved_docs.length === 0) {
-                    embeddingsList.innerHTML = '<div style="color: #999; font-size: 12px;">Sin documentos recuperados</div>';
-                    embeddingsList.parentElement.style.borderLeft = '4px solid #ff9800';
+                    safeUpdateHTML('embeddings-list', '<div style="color: #999; font-size: 12px;">Sin documentos recuperados</div>');
+                    safeUpdate('retrieved-count', '0');
                 } else {
                     // Actualizar estadísticas
-                    document.getElementById('retrieved-count').textContent = data.retrieved_docs.length;
+                    safeUpdate('retrieved-count', data.retrieved_docs.length);
                     if (data.retrieved_docs.length > 0) {
-                        const minSimilarity = Math.min(...data.retrieved_docs.map(d => d.similarity));
-                        document.getElementById('min-similarity').textContent = (minSimilarity * 100).toFixed(1) + '%';
+                        const minSimilarity = Math.min(...data.retrieved_docs.map(d => d.similarity || 0));
+                        safeUpdate('min-similarity', (minSimilarity * 100).toFixed(1) + '%');
                     }
                     
-                    // Construir HTML con mejor visualización
+                    // Construir HTML
                     let html = `
                         <div style="background: rgba(76, 175, 80, 0.1); border: 1px solid #4CAF50; border-radius: 6px; padding: 12px; margin-bottom: 15px;">
                             <div style="color: #4CAF50; margin-bottom: 10px; font-weight: bold;">✓ Se recuperaron ${data.retrieved_docs.length} chunks (ordenados por similitud):</div>
                     `;
                     
                     data.retrieved_docs.forEach((doc, i) => {
-                        const barWidth = (doc.similarity * 100);
-                        const confidence = doc.similarity >= 0.7 ? '🟢 Alta' : doc.similarity >= 0.5 ? '🟡 Media' : '🔴 Baja';
+                        const barWidth = ((doc.similarity || 0) * 100);
+                        const confidence = (doc.similarity || 0) >= 0.7 ? '🟢 Alta' : (doc.similarity || 0) >= 0.5 ? '🟡 Media' : '🔴 Baja';
                         html += `
                             <div class="chunk-item">
                                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                                     <div style="font-weight: bold; color: #fff; flex: 1;">
-                                        <span style="color: #4CAF50;">#${doc.rank}</span> — ${doc.title}
+                                        <span style="color: #4CAF50;">#${doc.rank || i+1}</span> — ${doc.title || 'Sin título'}
                                     </div>
-                                    <div style="background: #1a1a1a; padding: 4px 8px; border-radius: 4px; font-size: 10px; color: #4CAF50; white-space: nowrap; margin-left: 10px;">
-                                        ${(doc.similarity * 100).toFixed(1)}% ${confidence}
+                                    <div style="background: #1a1a1a; padding: 4px 8px; border-radius: 4px; font-size: 10px; color: #4CAF50;">
+                                        ${((doc.similarity || 0) * 100).toFixed(1)}% ${confidence}
                                     </div>
                                 </div>
                                 <div class="similarity-bar">
                                     <div class="similarity-fill" style="width: ${barWidth}%;"></div>
                                 </div>
-                                <div style="color: #bbb; font-size: 11px; line-height: 1.5; max-height: 60px; overflow: auto; background: rgba(0,0,0,0.5); padding: 8px; border-radius: 4px; border-left: 2px solid #4CAF50;">
-                                    ${doc.preview}
+                                <div style="color: #bbb; font-size: 11px; line-height: 1.5; max-height: 60px; overflow: auto; background: rgba(0,0,0,0.5); padding: 8px; border-radius: 4px;">
+                                    ${doc.preview || '(sin contenido)'}
                                 </div>
                             </div>
                         `;
                     });
                     html += '</div>';
-                    embeddingsList.innerHTML = html;
-                    embeddingsList.parentElement.style.borderLeft = '4px solid #4CAF50';
+                    safeUpdateHTML('embeddings-list', html);
                 }
                 
-                // Actualizar contexto completo (RAG_CONTEXT) - SIN TRUNCAR
-                const contextDiv = document.getElementById('prompt-context');
+                // Actualizar contexto completo (RAG_CONTEXT)
                 if (data.rag_context && data.rag_context.length > 0) {
                     const lines = data.rag_context.split('\n');
                     let contextHtml = '<div style="font-size: 11px; line-height: 1.6; color: #ddd;">';
@@ -813,37 +858,24 @@
                             contextHtml += `<div style="margin-bottom: 3px;">${line}</div>`;
                         }
                     });
-                    contextHtml += `<div style="color: #666; margin-top: 10px; font-size: 10px;">Total: ${data.rag_context.length} caracteres, ${lines.length} líneas</div>`;
+                    contextHtml += `<div style="color: #666; margin-top: 10px; font-size: 10px;">Total: ${data.rag_context.length} caracteres</div>`;
                     contextHtml += '</div>';
-                    contextDiv.innerHTML = contextHtml;
-                    contextDiv.parentElement.style.borderLeft = '4px solid #2196F3';
-                } else {
-                    contextDiv.innerHTML = '<div style="color: #666;">Esperando contexto...</div>';
-                    contextDiv.parentElement.style.borderLeft = '4px solid #ff9800';
+                    safeUpdateHTML('prompt-context', contextHtml);
                 }
                 
                 // Actualizar System Prompt
-                const systemPromptDiv = document.getElementById('system-prompt');
                 if (data.system_prompt) {
-                    systemPromptDiv.innerHTML = `<div style="font-size: 12px; line-height: 1.6; color: #FF9800; white-space: pre-wrap;">${data.system_prompt}</div>`;
-                    systemPromptDiv.parentElement.style.borderLeft = '4px solid #FF9800';
+                    safeUpdateHTML('system-prompt', `<div style="font-size: 12px; line-height: 1.6; color: #FF9800; white-space: pre-wrap;">${data.system_prompt}</div>`);
                 }
                 
                 // Actualizar Prompt Completo (User Message)
-                const fullPromptDiv = document.getElementById('full-user-prompt');
                 if (data.full_user_prompt) {
-                    fullPromptDiv.innerHTML = `<div style="font-size: 11px; line-height: 1.6; color: #E91E63; white-space: pre-wrap;">${data.full_user_prompt.length} caracteres total</div><hr style="border-color: #333; margin: 10px 0;"><div style="font-size: 11px; line-height: 1.6; color: #ddd; white-space: pre-wrap;">${data.full_user_prompt}</div>`;
-                    fullPromptDiv.parentElement.style.borderLeft = '4px solid #E91E63';
+                    safeUpdateHTML('full-user-prompt', `<div style="font-size: 11px; line-height: 1.6; color: #E91E63;">${data.full_user_prompt.length} caracteres total</div><hr style="border-color: #333; margin: 10px 0;"><div style="font-size: 11px; line-height: 1.6; color: #ddd; white-space: pre-wrap;">${data.full_user_prompt}</div>`);
                 }
                 
-                // Actualizar respuesta DeepSeek - COMPLETA, sin truncar
-                const responseDiv = document.getElementById('deepseek-response');
+                // Actualizar respuesta DeepSeek
                 if (data.deepseek_response) {
-                    responseDiv.innerHTML = `<div style="font-size: 11px; line-height: 1.6; color: #CE93D8; white-space: pre-wrap;">${data.deepseek_response}</div>`;
-                    responseDiv.parentElement.style.borderLeft = '4px solid #9C27B0';
-                } else {
-                    responseDiv.textContent = 'Esperando respuesta...';
-                    responseDiv.parentElement.style.borderLeft = '4px solid #ff9800';
+                    safeUpdateHTML('deepseek-response', `<div style="font-size: 11px; line-height: 1.6; color: #CE93D8; white-space: pre-wrap;">${data.deepseek_response}</div>`);
                 }
             } catch (e) {
                 console.error('Error fetching prompt flow:', e);
@@ -854,9 +886,10 @@
         document.addEventListener('DOMContentLoaded', () => {
             refreshEvents();
             refreshStats();
+            refreshPromptFlow();
             startAutoRefresh();
             
-            // Actualizar timer cada 1 segundo
+            // Actualizar timer cada segundo
             setInterval(updateRefreshTimer, 1000);
         });
     </script>
