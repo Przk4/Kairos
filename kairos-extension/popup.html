@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 300px;
+    font-family: 'Inter','Segoe UI',system-ui,sans-serif;
+    background: #fff;
+    color: #1a1a2e;
+    padding: 20px;
+  }
+  .logo { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  .logo svg { width: 28px; height: 28px; }
+  .logo span { font-size: 20px; font-weight: 700; color: #3355ff; }
+  .status {
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-size: 13px;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .status.ok { background: #eef7ee; color: #1a8c1a; }
+  .status.no { background: #fef2f2; color: #c53030; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .dot.green { background: #22c55e; }
+  .dot.red { background: #ef4444; }
+  .info { font-size: 12px; color: #6b7280; line-height: 1.5; margin-bottom: 14px; }
+  .btn {
+    display: block; width: 100%;
+    padding: 10px; border: none;
+    border-radius: 10px; cursor: pointer;
+    font: 600 13px/1 'Inter',sans-serif;
+    text-align: center; text-decoration: none;
+    transition: background .15s;
+  }
+  .btn-primary { background: #3355ff; color: #fff; }
+  .btn-primary:hover { background: #2244dd; }
+  .btn-outline { background: #f5f7fa; color: #3355ff; border: 1px solid #e5e7eb; margin-top: 8px; }
+  .btn-outline:hover { background: #eef1ff; }
+  .instructions { font-size: 12px; color: #6b7280; margin-top: 14px; line-height: 1.6; }
+  .instructions strong { color: #1a1a2e; }
+</style>
+</head>
+<body>
+  <div class="logo">
+    <svg viewBox="0 0 24 24" fill="#3355ff"><path d="M12 2L9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.64-7.03L22 9.24l-7.19-.61z"/></svg>
+    <span>Kairos</span>
+  </div>
+
+  <div id="statusBox" class="status no">
+    <div class="dot red" id="statusDot"></div>
+    <span id="statusText">Verificando…</span>
+  </div>
+
+  <p class="info" id="infoText">Conectando con kairos.bar…</p>
+
+  <a class="btn btn-primary" id="loginBtn" href="https://kairos.bar/" target="_blank" style="display:none;">
+    Iniciar sesión en Kairos
+  </a>
+
+  <a class="btn btn-outline" href="https://kairos.bar/" target="_blank">
+    Abrir Kairos completo
+  </a>
+
+  <div class="instructions">
+    <strong>Cómo usar:</strong><br>
+    1. Selecciona texto en Canvas o cualquier página.<br>
+    2. Haz clic en "Resolver con Kairos".<br>
+    3. Kairos te da la respuesta al instante.
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

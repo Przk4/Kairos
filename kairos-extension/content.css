@@ -1,0 +1,4 @@
+/* Kairos Extension — Content Script Styles
+   All styles are scoped inside #kairos-ext-root shadow DOM,
+   so they won't leak into the host page.
+   This file is intentionally minimal — real styles live inside the shadow DOM. */

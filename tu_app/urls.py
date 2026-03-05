@@ -24,6 +24,11 @@ urlpatterns = [
     # NEW: Module stats endpoint for dashboard
     path('api/modules/stats-all/', views.get_all_modules_stats, name='get_all_modules_stats'),
     
+    # Extension endpoints
+    path('api/extension/ask/', views.extension_ask, name='extension_ask'),
+    path('api/extension/auth/', views.extension_check_auth, name='extension_check_auth'),
+    path('api/extension/courses/', views.extension_courses, name='extension_courses'),
+    
     # Debug endpoints
     path('api/test/', views.test_api, name='test_api'),
     path('api/debug/events/', views.debug_events, name='debug_events'),

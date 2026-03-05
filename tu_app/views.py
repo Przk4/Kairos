@@ -5,6 +5,7 @@ from django.contrib.auth.models import User
 from django.contrib.auth import login as auth_login, logout as auth_logout
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
+from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required
 from django.urls import reverse
 from datetime import timedelta
@@ -1789,4 +1790,162 @@ def test_button_page(request):
     Página de test para debugging del botón de análisis.
     """
     return render(request, 'tu_app/test_button.html')
+
+
+# ============================================================================
+# EXTENSIÓN DE CHROME — Endpoints para la extensión de Kairos
+# ============================================================================
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def extension_ask(request):
+    """
+    Endpoint para la extensión de Chrome.
+    Recibe texto seleccionado y devuelve respuesta RAG.
+    CSRF exempt porque las requests vienen del service worker de la extensión.
+    Autenticación por sesión (cookie sessionid).
+    """
+    if not request.user.is_authenticated:
+        return JsonResponse({'error': 'No autenticado', 'authenticated': False}, status=401)
+
+    try:
+        data = json.loads(request.body)
+        text = data.get('text', '').strip()
+        canvas_course_id = data.get('canvas_course_id')
+
+        if not text:
+            return JsonResponse({'error': 'Texto vacío'}, status=400)
+
+        # Buscar curso por canvas_course_id si se proporcionó
+        course = None
+        if canvas_course_id:
+            course = Course.objects.filter(
+                canvas_course_id=canvas_course_id,
+                user=request.user
+            ).first()
+
+        # Si no hay curso, usar el primer curso del usuario
+        if not course:
+            course = Course.objects.filter(user=request.user).first()
+
+        if not course:
+            return JsonResponse({'error': 'No se encontró un curso asociado'}, status=404)
+
+        # RAG pipeline (misma lógica que chat_api)
+        rag_service = get_rag_service()
+        query_analyzer = get_query_analyzer(rag_service.embedding_model)
+        query_analysis = query_analyzer.analyze(text)
+
+        optimal_fragments = query_analysis['num_fragments']
+        query_type = query_analysis['query_type']
+
+        context = []
+        fragments_per_module = max(2, optimal_fragments // max(1, course.modules.count()))
+        for mod in course.modules.all():
+            mod_context = rag_service.search_context(
+                text, mod.id, course.id,
+                top_k=fragments_per_module,
+                query_type=query_type
+            )
+            context.extend(mod_context)
+
+        # Construir contexto limpio
+        import re as _re
+        context_text = ""
+        for i, item in enumerate(context):
+            if isinstance(item, dict):
+                raw = item.get('content', '')
+                clean = _re.sub(r'\n*---\s*Slide\s*\d+\s*---\n*', '\n', raw)
+                clean = _re.sub(r'\n*---\s*Página\s*\d+\s*---\n*', '\n', clean)
+                lines = [l.strip() for l in clean.split('\n')
+                         if l.strip() and len(l.strip()) >= 3
+                         and not _re.match(r'^\d{1,3}$', l.strip())
+                         and not _re.match(r'^20[\dXx]{2}$', l.strip())
+                         and not _re.search(r'pie de p[aá]gina|footer|placeholder|click to edit|haga clic', l, _re.IGNORECASE)]
+                clean = '\n'.join(lines).strip()
+                if clean and len(clean) >= 15:
+                    title = item.get('metadata', {}).get('item_title', '')
+                    context_text += f"\n[Doc {i+1}] {title}\n{clean}"
+
+        # Obtener respuesta de IA
+        ai_service = get_ai_service()
+        start_time = time.time()
+        ai_response = ai_service.answer_question(
+            question=text,
+            context=context,
+            user=request.user
+        )
+        processing_time = time.time() - start_time
+
+        answer = ai_response.get('answer', '')
+        tokens = ai_response.get('tokens_used', 0)
+
+        # Limpiar respuesta
+        try:
+            from textwrap import dedent
+            if answer:
+                answer = dedent(answer).strip()
+                answer = '\n'.join(l.rstrip() for l in answer.splitlines())
+                answer = _re.sub(r'\n{3,}', '\n\n', answer)
+        except Exception:
+            pass
+
+        # Guardar mensaje
+        ChatMessage.objects.create(
+            user=request.user,
+            course=course,
+            module=None,
+            role='student',
+            content=f"[Extensión] {text}"
+        )
+        ChatMessage.objects.create(
+            user=request.user,
+            course=course,
+            module=None,
+            role='ai',
+            content=answer,
+            tokens_used=tokens,
+            processing_time=processing_time,
+            model_used='deepseek'
+        )
+
+        logger.info(f"[EXT] Response for {request.user.username}: {tokens} tokens, {processing_time:.2f}s")
+
+        return JsonResponse({
+            'success': True,
+            'response': answer,
+            'tokens_used': tokens,
+            'processing_time': f'{processing_time:.2f}'
+        })
+
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'JSON inválido'}, status=400)
+    except Exception as e:
+        logger.error(f"[EXT] Error for {request.user.username}: {e}")
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def extension_check_auth(request):
+    """Verifica si el usuario está autenticado (para la extensión)."""
+    if request.user.is_authenticated:
+        return JsonResponse({
+            'authenticated': True,
+            'username': request.user.username,
+        })
+    return JsonResponse({'authenticated': False}, status=200)
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def extension_courses(request):
+    """Devuelve los cursos del usuario autenticado (para la extensión)."""
+    if not request.user.is_authenticated:
+        return JsonResponse({'error': 'No autenticado'}, status=401)
+
+    courses = Course.objects.filter(user=request.user).values(
+        'id', 'canvas_course_id', 'name', 'code'
+    )
+    return JsonResponse({'courses': list(courses)})
 

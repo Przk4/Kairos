@@ -4,25 +4,27 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chat - {{ course.name }} | Kairos</title>
+    <!-- Google Fonts: Inter -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
     <!-- KaTeX for math formulas -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
     <!-- Highlight.js for code syntax -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f5f7fa; color: #333; }
+        body { font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; background-color: #f5f7fa; color: #1a1a2e; }
 
         .container { display: flex; height: 100vh; }
 
-        .sidebar { width: 25%; background: #fff; border-right: 1px solid #dee2e6; padding: 20px; overflow-y: auto; }
+        .sidebar { width: 25%; background: #fff; border-right: 1px solid #e5e7eb; padding: 20px; overflow-y: auto; }
         .main-chat { width: 75%; display: flex; flex-direction: column; }
 
-        .header { background: #007bff; color: white; padding: 20px; display: flex; justify-content: space-between; align-items: center; }
-        .header h1 { margin: 0; font-size: 1.5em; }
-        .back-btn { background: rgba(255,255,255,0.2); color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; }
-        .back-btn:hover { background: rgba(255,255,255,0.3); }
+        .header { background: #3355ff; color: white; padding: 20px; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { margin: 0; font-size: 1.5em; font-weight: 700; }
+        .back-btn { background: rgba(255,255,255,0.15); color: white; border: none; padding: 10px 15px; border-radius: 10px; cursor: pointer; font-weight: 500; transition: background .15s; }
+        .back-btn:hover { background: rgba(255,255,255,0.25); }
 
-        .chat-history { flex: 1; overflow-y: auto; padding: 20px; background: #f9f9f9; }
+        .chat-history { flex: 1; overflow-y: auto; padding: 20px; background: #f9fafb; }
         .message { margin-bottom: 20px; display: flex; animation: slideIn 0.3s ease-in; }
 
         @keyframes slideIn {
@@ -36,17 +38,16 @@
         /* ===== Message bubble ===== */
         .message-content {
             padding: 14px 18px;
-            border-radius: 12px;
+            border-radius: 14px;
             max-width: 75%;
             word-wrap: break-word;
             overflow-wrap: anywhere;
             line-height: 1.65;
             font-size: 0.95em;
-            color: #fff;
             overflow-x: auto;
         }
-        .message.student .message-content { background: #28a745; }
-        .message.ai .message-content { background: #495057; }
+        .message.student .message-content { background: #3355ff; color: #fff; }
+        .message.ai .message-content { background: #fff; color: #1a1a2e; border: 1px solid #e5e7eb; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
 
         .msg-emoji { margin-right: 4px; }
 
@@ -64,21 +65,26 @@
         .msg-text li { margin-bottom: 0.25em; }
         .msg-text strong { font-weight: 700; }
         .msg-text em { font-style: italic; }
-        .msg-text a { color: #8ecfff; text-decoration: underline; }
-        .msg-text hr { border: none; border-top: 1px solid rgba(255,255,255,0.2); margin: 0.8em 0; }
+
+        /* Links: different color per bubble */
+        .message.student .msg-text a { color: #c5d5ff; text-decoration: underline; }
+        .message.ai .msg-text a { color: #3355ff; text-decoration: underline; }
+        .msg-text hr { border: none; border-top: 1px solid rgba(0,0,0,0.1); margin: 0.8em 0; }
 
         /* Blockquotes */
         .msg-text blockquote {
-            border-left: 3px solid rgba(255,255,255,0.4);
+            border-left: 3px solid #3355ff;
             margin: 0.5em 0; padding: 4px 12px;
-            background: rgba(255,255,255,0.06); border-radius: 4px;
+            background: rgba(51,85,255,0.04); border-radius: 4px; color: #374151;
         }
+        .message.student .msg-text blockquote { border-left-color: rgba(255,255,255,0.5); background: rgba(255,255,255,0.08); color: #e0e0e0; }
 
         /* Inline code */
         .msg-text code:not([class]) {
-            background: rgba(0,0,0,0.25); padding: 2px 5px; border-radius: 3px;
-            font-family: 'Fira Code', 'Consolas', monospace; font-size: 0.9em;
+            background: rgba(51,85,255,0.08); padding: 2px 5px; border-radius: 3px;
+            font-family: 'Fira Code', 'Consolas', monospace; font-size: 0.9em; color: #1a1a2e;
         }
+        .message.student .msg-text code:not([class]) { background: rgba(0,0,0,0.2); color: #fff; }
 
         /* Code blocks */
         .msg-text pre {
@@ -94,46 +100,50 @@
         .msg-text .table-wrap { overflow-x: auto; margin: 0.6em 0; border-radius: 6px; }
         .msg-text table {
             width: 100%; border-collapse: collapse; font-size: 0.9em;
-            background: rgba(255,255,255,0.06);
         }
+        .message.ai .msg-text table { background: #f9fafb; }
+        .message.student .msg-text table { background: rgba(255,255,255,0.06); }
         .msg-text th, .msg-text td {
-            border: 1px solid rgba(255,255,255,0.15);
+            border: 1px solid #e5e7eb;
             padding: 7px 10px; text-align: left; vertical-align: top;
         }
-        .msg-text th { background: rgba(255,255,255,0.1); font-weight: 700; }
-        .msg-text tr:nth-child(even) { background: rgba(255,255,255,0.04); }
+        .message.student .msg-text th, .message.student .msg-text td { border-color: rgba(255,255,255,0.15); }
+        .msg-text th { background: rgba(51,85,255,0.06); font-weight: 700; }
+        .message.student .msg-text th { background: rgba(255,255,255,0.1); }
 
         /* Images */
         .msg-text img { max-width: 100%; border-radius: 6px; margin: 0.4em 0; }
 
         /* KaTeX overrides inside bubbles */
         .msg-text .katex-display { margin: 0.6em 0; overflow-x: auto; overflow-y: hidden; }
-        .msg-text .katex { font-size: 1.05em; color: #fff; }
+        .message.ai .msg-text .katex { font-size: 1.05em; color: #1a1a2e; }
+        .message.student .msg-text .katex { font-size: 1.05em; color: #fff; }
 
-        .message-time { font-size: 0.75em; color: #999; margin-top: 5px; padding: 0 5px; }
+        .message-time { font-size: 0.75em; color: #9ca3af; margin-top: 5px; padding: 0 5px; }
 
-        .input-area { padding: 20px; background: #fff; border-top: 1px solid #dee2e6; display: flex; gap: 10px; }
-        .input-area input { flex: 1; padding: 12px; border: 1px solid #dee2e6; border-radius: 5px; font-size: 1em; }
-        .input-area button { background: #007bff; color: white; border: none; padding: 12px 20px; border-radius: 5px; cursor: pointer; font-weight: bold; }
-        .input-area button:hover { opacity: 0.9; }
+        .input-area { padding: 20px; background: #fff; border-top: 1px solid #e5e7eb; display: flex; gap: 10px; }
+        .input-area input { flex: 1; padding: 12px 16px; border: 1px solid #e5e7eb; border-radius: 12px; font-size: 1em; font-family: inherit; transition: border-color .15s; }
+        .input-area input:focus { outline: none; border-color: #3355ff; box-shadow: 0 0 0 3px rgba(51,85,255,0.1); }
+        .input-area button { background: #3355ff; color: white; border: none; padding: 12px 20px; border-radius: 12px; cursor: pointer; font-weight: 600; font-family: inherit; transition: background .15s; }
+        .input-area button:hover { background: #2244dd; }
         .input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-        .sidebar h3 { color: #007bff; margin-bottom: 15px; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
+        .sidebar h3 { color: #3355ff; margin-bottom: 15px; border-bottom: 2px solid #3355ff; padding-bottom: 10px; font-weight: 700; }
         .module-list { list-style: none; }
-        .module-list li { padding: 10px; background: #f8f9fa; margin-bottom: 8px; border-radius: 5px; cursor: pointer; transition: all 0.3s; color: #333; }
-        .module-list li:hover { background: #e7f3ff; }
-        .module-list li.active { background: #007bff; color: white; border-left: none; }
-        .module-list li.active:hover { background: #0056b3; }
+        .module-list li { padding: 10px; background: #f8f9fa; margin-bottom: 8px; border-radius: 10px; cursor: pointer; transition: all 0.2s; color: #374151; }
+        .module-list li:hover { background: #eef1ff; color: #3355ff; }
+        .module-list li.active { background: #3355ff; color: white; border-left: none; }
+        .module-list li.active:hover { background: #2244dd; }
         .module-list li.active span { color: white; }
         .module-list li.active strong { color: white; }
 
-        .module-info { background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
-        .module-info h4 { color: #0056b3; margin-bottom: 10px; }
-        .module-status { font-size: 0.9em; color: #6c757d; }
+        .module-info { background: #f8f9fa; padding: 15px; border-radius: 10px; margin-bottom: 20px; }
+        .module-info h4 { color: #1a6df2; margin-bottom: 10px; font-weight: 600; }
+        .module-status { font-size: 0.9em; color: #6b7280; }
 
-        .loading { text-align: center; padding: 20px; color: #999; }
+        .loading { text-align: center; padding: 20px; color: #9ca3af; }
         .typing-indicator { display: flex; gap: 4px; }
-        .typing-indicator span { width: 8px; height: 8px; background: #999; border-radius: 50%; animation: bounce 1.4s infinite; }
+        .typing-indicator span { width: 8px; height: 8px; background: #9ca3af; border-radius: 50%; animation: bounce 1.4s infinite; }
         .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
         .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
 
@@ -142,7 +152,7 @@
             40% { opacity: 1; }
         }
 
-        .no-modules { color: #999; text-align: center; padding: 20px; }
+        .no-modules { color: #9ca3af; text-align: center; padding: 20px; }
     </style>
 </head>
 <body>
@@ -383,10 +393,10 @@
             }
             if (data.is_analyzed) {
                 statusSpan.textContent = '✅ Vectores guardados';
-                statusSpan.style.color = '#28a745';
+                statusSpan.style.color = '#22c55e';
             } else {
                 statusSpan.textContent = '⚫ Sin vectores';
-                statusSpan.style.color = '#6c757d';
+                statusSpan.style.color = '#6b7280';
             }
         } catch (error) {
             console.error(`[CHAT] Error syncing status for module ${moduleId}:`, error);
