@@ -237,51 +237,55 @@ class RAGService:
                 body_parts = []
                 
                 for shape in slide.shapes:
-                    # Intentar detectar el título del slide
-                    if shape.has_text_frame:
-                        shape_text = shape.text.strip()
-                        if not shape_text:
-                            continue
+                    try:
+                        # Extraer texto del shape
+                        shape_text = ""
+                        try:
+                            if hasattr(shape, 'text') and shape.text:
+                                shape_text = shape.text.strip()
+                        except Exception:
+                            pass
                         
-                        # El placeholder de título suele ser el primero o tener placeholder_format
+                        # Detectar si es título del slide (placeholder idx 0 o 1)
                         is_title = False
                         try:
                             if hasattr(shape, 'placeholder_format') and shape.placeholder_format is not None:
-                                # placeholder idx 0 = título, idx 1 = subtítulo
                                 if shape.placeholder_format.idx in (0, 1):
                                     is_title = True
                         except Exception:
                             pass
                         
-                        if is_title and not slide_title:
-                            slide_title = shape_text
-                        else:
-                            body_parts.append(shape_text)
-                    elif hasattr(shape, "text") and shape.text and shape.text.strip():
-                        body_parts.append(shape.text.strip())
-                    
-                    # Si es una tabla, extraer su contenido
-                    if shape.shape_type == 14:  # MSO_SHAPE_TYPE.TABLE
+                        if shape_text:
+                            if is_title and not slide_title:
+                                slide_title = shape_text
+                            else:
+                                body_parts.append(shape_text)
+                        
+                        # Si es una tabla, extraer su contenido (además del texto ya capturado)
                         try:
-                            table = shape.table
-                            table_rows = []
-                            for row in table.rows:
-                                row_cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
-                                if row_cells:
-                                    table_rows.append(' | '.join(row_cells))
-                            if table_rows:
-                                body_parts.append('\n'.join(table_rows))
-                        except Exception as e:
-                            logger.warning(f"Could not extract table from slide {slide_num + 1}: {e}")
+                            if shape.shape_type == 14:  # MSO_SHAPE_TYPE.TABLE
+                                table = shape.table
+                                table_rows = []
+                                for row in table.rows:
+                                    row_cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                                    if row_cells:
+                                        table_rows.append(' | '.join(row_cells))
+                                if table_rows:
+                                    body_parts.append('\n'.join(table_rows))
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        logger.warning(f"Error processing shape in slide {slide_num + 1}: {e}")
+                        continue
                 
                 # Combinar y limpiar el contenido del slide
                 raw_body = '\n'.join(body_parts)
                 clean_body = self._clean_slide_text(raw_body)
                 clean_title = self._clean_slide_text(slide_title)
                 
-                # Solo incluir slides con contenido significativo (> 20 chars)
+                # Solo incluir slides con contenido significativo (> 10 chars)
                 total_content = f"{clean_title} {clean_body}".strip()
-                if len(total_content) < 20:
+                if len(total_content) < 10:
                     skipped_slides += 1
                     continue
                 
@@ -386,19 +390,6 @@ class RAGService:
         except Exception as e:
             logger.error(f"Error extracting XLSX text: {e}", exc_info=True)
             return None
-        """
-        Crea o obtiene una colección en ChromaDB.
-        Una colección por módulo para mejorar queries.
-        """
-        try:
-            collection = self.client.get_or_create_collection(
-                name=collection_name,
-                metadata={"hnsw:space": "cosine"}
-            )
-            return collection
-        except Exception as e:
-            logger.error(f"Error creating/getting collection {collection_name}: {e}")
-            raise
     
     def _extract_text_from_file(self, file_url: str, access_token: str) -> Optional[str]:
         """
@@ -913,7 +904,10 @@ class RAGService:
                     logger.info(f"Deleted old collection {collection_name}")
                 except:
                     pass  # Collection doesn't exist yet
-                collection = self.client.get_or_create_collection(name=collection_name)
+                collection = self.client.get_or_create_collection(
+                    name=collection_name,
+                    metadata={"hnsw:space": "cosine"}
+                )
             else:
                 # Usar en memoria - limpiar y crear nueva
                 if collection_name in self.in_memory_db:
@@ -1064,6 +1058,11 @@ class RAGService:
             # Log de finalización
             debug_service.log_rag_analysis_complete(module.id, len(items), embeddings_count)
             logger.info(f"Module analysis completed: {len(items)} items processed, {embeddings_count} embeddings")
+            
+            if embeddings_count == 0:
+                logger.error(f"[ANALYZE] ❌ 0 embeddings created for module {module.id} - analysis failed")
+                return False
+            
             return True
             
         except Exception as e:
