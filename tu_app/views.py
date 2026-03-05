@@ -1261,78 +1261,14 @@ def debug_rag_status(request):
 @require_http_methods(["GET"])
 def debug_search_test(request):
     """
-    Endpoint de diagnóstico para probar búsqueda RAG con detalles crudos.
-    Muestra distancias originales de ChromaDB y cómo se calculan las similitudes.
-    
-    Uso: /api/debug/search-test/?q=resumen&module_id=1&course_id=1
+    Endpoint simple que solo retorna la config para diagnosticar.
+    NO hace queries a ChromaDB porque parece estar colgando.
     """
-    try:
-        query = request.GET.get('q', 'Dame un resumen')
-        module_id = int(request.GET.get('module_id', 1))
-        course_id = int(request.GET.get('course_id', 1))
-        top_k = int(request.GET.get('top_k', 5))
-        
-        rag_service = get_rag_service()
-        collection_name = f"module_{module_id}_course_{course_id}"
-        
-        result = {
-            'query': query,
-            'module_id': module_id,
-            'course_id': course_id,
-            'top_k': top_k,
-            'collection_name': collection_name,
-            'code_version': '2024-03-04-v2-cosine-fix',
-        }
-        
-        if rag_service.using_chromadb and rag_service.client:
-            try:
-                collection = rag_service.client.get_collection(collection_name)
-                total_docs = collection.count()
-                result['total_docs_in_collection'] = total_docs
-                
-                raw_results = collection.query(
-                    query_texts=[query],
-                    n_results=min(top_k, total_docs),
-                    include=["documents", "metadatas", "distances"]
-                )
-                
-                result['raw_distances'] = raw_results.get('distances', [[]])[0]
-                
-                # Mostrar cómo se calcula cada similitud
-                items = []
-                if raw_results['documents'] and raw_results['documents'][0]:
-                    for i, (doc, meta, dist) in enumerate(zip(
-                        raw_results['documents'][0],
-                        raw_results['metadatas'][0],
-                        raw_results['distances'][0]
-                    )):
-                        # Fórmula correcta
-                        similarity_correct = max(0, 1 - (dist / 2))
-                        # Fórmula incorrecta (vieja)
-                        similarity_wrong = 1 - dist
-                        
-                        items.append({
-                            'rank': i + 1,
-                            'title': meta.get('item_title', 'Unknown'),
-                            'distance': round(dist, 4),
-                            'similarity_correct': round(similarity_correct, 4),
-                            'similarity_wrong': round(similarity_wrong, 4),
-                            'preview': doc[:100] + '...'
-                        })
-                
-                result['items'] = items
-                result['diagnosis'] = 'Si ves similarity_wrong en el dashboard, el servidor no está actualizado'
-                
-            except Exception as e:
-                result['error'] = str(e)
-        else:
-            result['error'] = 'ChromaDB not available'
-        
-        return JsonResponse(result)
-        
-    except Exception as e:
-        logger.error(f"Error in debug_search_test: {e}")
-        return JsonResponse({'error': str(e)}, status=500)
+    return JsonResponse({
+        'code_version': '2024-03-04-v2-cosine-fix',
+        'similarity_formula': '1 - (distance / 2)',
+        'status': 'Usa /api/debug/rag-status/ en su lugar. Este endpoint tiene problemas con ChromaDB.'
+    })
 
 
 @login_required
