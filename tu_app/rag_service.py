@@ -1020,10 +1020,12 @@ class RAGService:
                 # Usar ChromaDB
                 try:
                     collection = self.client.get_collection(collection_name)
+                    total_docs = collection.count()
+                    logger.info(f"[RAG] Collection {collection_name}: {total_docs} docs, requesting top_k={top_k}")
                     
                     results = collection.query(
                         query_texts=[query],
-                        n_results=top_k,
+                        n_results=min(top_k, total_docs),  # No pedir más de lo que hay
                         include=["documents", "metadatas", "distances"]
                     )
                     
@@ -1034,12 +1036,16 @@ class RAGService:
                             results['metadatas'][0],
                             results['distances'][0]
                         ):
+                            # ChromaDB cosine distance: 0 = idéntico, 2 = opuesto
+                            # Convertir a similitud [0, 1]: similarity = 1 - (distance / 2)
+                            similarity = max(0, 1 - (distance / 2))
                             context_list.append({
                                 'content': doc,
                                 'metadata': metadata,
-                                'relevance_score': 1 - distance
+                                'relevance_score': similarity
                             })
                     
+                    logger.info(f"[RAG] Retrieved {len(context_list)} chunks, distances: {results.get('distances', [[]])[0][:5]}")
                     debug_service.log_rag_search(query, module_id, len(context_list))
                     return context_list
                 except Exception as e:

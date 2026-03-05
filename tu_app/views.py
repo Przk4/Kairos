@@ -1510,25 +1510,46 @@ def get_all_modules_stats(request):
     """
     Endpoint para obtener el estado de TODOS los módulos y sus embeddings.
     Usado por: Dashboard, Botones, cualquier componente que necesite ver estado real.
+    Lee de ChromaDB primero, fallback a Django DB.
     """
     try:
-        # Query eficiente: prefetch embeddings en una sola query
         modules = Module.objects.select_related('course').prefetch_related('embedding').all()
         total_embeddings = 0
         modules_data = []
         
+        # Intentar usar ChromaDB para stats reales
+        chromadb_available = False
+        chromadb_collections = {}
+        try:
+            if rag_service.using_chromadb and rag_service.client:
+                chromadb_available = True
+                # Obtener todas las colecciones de ChromaDB
+                all_collections = rag_service.client.list_collections()
+                for coll in all_collections:
+                    chromadb_collections[coll.name] = coll.count()
+                logger.debug(f"[STATS] ChromaDB collections: {chromadb_collections}")
+        except Exception as e:
+            logger.warning(f"[STATS] ChromaDB not available: {e}")
+        
         for module in modules:
-            try:
-                embedding = module.embedding  # Ya está prefetched, no hay query extra
-                docs = embedding.embedding_data.get('documents', []) if embedding.embedding_data else []
-                doc_count = len(docs)
-            except ModuleEmbedding.DoesNotExist:
-                doc_count = 0
+            doc_count = 0
             
-            # Sumar embeddings totales
+            # Primero intentar ChromaDB
+            if chromadb_available:
+                collection_name = f"module_{module.id}_course_{module.course_id}"
+                if collection_name in chromadb_collections:
+                    doc_count = chromadb_collections[collection_name]
+            
+            # Fallback a Django DB si ChromaDB no tiene datos
+            if doc_count == 0:
+                try:
+                    embedding = module.embedding
+                    docs = embedding.embedding_data.get('documents', []) if embedding.embedding_data else []
+                    doc_count = len(docs)
+                except ModuleEmbedding.DoesNotExist:
+                    doc_count = 0
+            
             total_embeddings += doc_count
-            
-            # Determinar estado del botón basado ÚNICAMENTE en embeddings
             has_embeddings = doc_count > 0
             button_text = '🔄 Re-analizar' if has_embeddings else '🔍 Analizar'
             
@@ -1545,7 +1566,8 @@ def get_all_modules_stats(request):
             'timestamp': str(timezone.now()),
             'total_modules': modules.count(),
             'total_embeddings': total_embeddings,
-            'modules': modules_data
+            'modules': modules_data,
+            'chromadb_active': chromadb_available
         })
     except Exception as e:
         logger.error(f"Error getting all modules stats: {e}")
