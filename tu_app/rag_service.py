@@ -223,6 +223,35 @@ class RAGService:
         
         return '\n'.join(cleaned_lines)
     
+    def _table_to_markdown(self, table) -> str:
+        """
+        Convierte una tabla de python-pptx a formato Markdown.
+        """
+        rows_data = []
+        for row in table.rows:
+            cells = [cell.text.strip().replace('|', '/') for cell in row.cells]
+            rows_data.append(cells)
+        
+        if not rows_data:
+            return ""
+        
+        # Normalizar: todas las filas deben tener el mismo número de columnas
+        max_cols = max(len(r) for r in rows_data)
+        for r in rows_data:
+            while len(r) < max_cols:
+                r.append('')
+        
+        # Construir Markdown table
+        md_lines = []
+        # Header (primera fila)
+        md_lines.append('| ' + ' | '.join(rows_data[0]) + ' |')
+        md_lines.append('| ' + ' | '.join(['---'] * max_cols) + ' |')
+        # Resto de filas
+        for row in rows_data[1:]:
+            md_lines.append('| ' + ' | '.join(row) + ' |')
+        
+        return '\n'.join(md_lines)
+
     def _extract_text_from_pptx(self, pptx_bytes) -> Optional[str]:
         """
         Extrae texto de un archivo PPTX (PowerPoint).
@@ -242,6 +271,7 @@ class RAGService:
             
             all_slide_texts = []
             skipped_slides = 0
+            self._last_pptx_tables = []  # Almacenar tablas extraídas para embeddings separados
             
             for slide_num, slide in enumerate(presentation.slides):
                 slide_title = ""
@@ -266,25 +296,33 @@ class RAGService:
                         except Exception:
                             pass
                         
-                        if shape_text:
+                        # Si es una tabla, convertir a Markdown
+                        is_table = False
+                        try:
+                            if shape.shape_type == 14:  # MSO_SHAPE_TYPE.TABLE
+                                is_table = True
+                                md_table = self._table_to_markdown(shape.table)
+                                if md_table and len(md_table) > 10:
+                                    body_parts.append(md_table)
+                                    # Guardar tabla con contexto del slide para embedding separado
+                                    table_context = slide_title or f"Slide {slide_num + 1}"
+                                    self._last_pptx_tables.append({
+                                        'slide_num': slide_num + 1,
+                                        'slide_title': table_context,
+                                        'markdown': md_table,
+                                        'row_count': len(shape.table.rows),
+                                        'col_count': len(shape.table.columns) if hasattr(shape.table, 'columns') else 0,
+                                    })
+                                    logger.info(f"  [TABLE] Slide {slide_num + 1}: {len(shape.table.rows)} rows Markdown table")
+                        except Exception:
+                            pass
+                        
+                        # Agregar texto (si no es tabla, porque la tabla ya se agregó como Markdown)
+                        if shape_text and not is_table:
                             if is_title and not slide_title:
                                 slide_title = shape_text
                             else:
                                 body_parts.append(shape_text)
-                        
-                        # Si es una tabla, extraer su contenido (además del texto ya capturado)
-                        try:
-                            if shape.shape_type == 14:  # MSO_SHAPE_TYPE.TABLE
-                                table = shape.table
-                                table_rows = []
-                                for row in table.rows:
-                                    row_cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
-                                    if row_cells:
-                                        table_rows.append(' | '.join(row_cells))
-                                if table_rows:
-                                    body_parts.append('\n'.join(table_rows))
-                        except Exception:
-                            pass
                     except Exception as e:
                         logger.warning(f"Error processing shape in slide {slide_num + 1}: {e}")
                         continue
@@ -313,7 +351,8 @@ class RAGService:
             
             final_text = '\n'.join(all_slide_texts)
             logger.info(f"PPTX extraction complete: {len(all_slide_texts)} slides with content, "
-                       f"{skipped_slides} skipped, {len(final_text)} chars total")
+                       f"{skipped_slides} skipped, {len(self._last_pptx_tables)} tables found, "
+                       f"{len(final_text)} chars total")
             return final_text
         except Exception as e:
             logger.error(f"Error extracting PPTX text: {e}", exc_info=True)
@@ -1026,6 +1065,54 @@ class RAGService:
                                 collection['importance_scores'].append(importance)  # NUEVO
                         
                         logger.debug(f"  [DONE] Created {len(chunks)} embeddings with importance scores")
+                        
+                        # Crear embeddings SEPARADOS para tablas (si el archivo era PPTX)
+                        pptx_tables = getattr(self, '_last_pptx_tables', [])
+                        if pptx_tables:
+                            logger.info(f"  [TABLES] Creating {len(pptx_tables)} separate table embeddings")
+                            for tbl_idx, tbl in enumerate(pptx_tables):
+                                # Texto enriquecido: título del slide + tabla en Markdown
+                                table_text = f"{item.title} - Tabla en: {tbl['slide_title']}\n\n{tbl['markdown']}"
+                                table_text_clean = self._clean_slide_text(table_text)
+                                
+                                if not table_text_clean or len(table_text_clean.strip()) < 20:
+                                    continue
+                                
+                                tbl_embedding = self.embedding_model.encode(table_text_clean).tolist()
+                                tbl_importance = 0.75  # Alta importancia para datos estructurados
+                                embeddings_count += 1
+                                
+                                tbl_doc_id = f"item_{item.id}_table_{tbl_idx}"
+                                tbl_metadata = {
+                                    'item_id': str(item.id),
+                                    'item_title': item.title,
+                                    'item_type': item.get_item_type_display(),
+                                    'module_id': str(module.id),
+                                    'content_type': 'table',
+                                    'table_slide': str(tbl['slide_num']),
+                                    'table_slide_title': tbl['slide_title'],
+                                    'table_rows': str(tbl['row_count']),
+                                    'has_content': 'yes',
+                                    'importance_score': str(tbl_importance),
+                                }
+                                
+                                if self.using_chromadb and self.client:
+                                    collection.add(
+                                        ids=[tbl_doc_id],
+                                        embeddings=[tbl_embedding],
+                                        documents=[table_text_clean],
+                                        metadatas=[tbl_metadata]
+                                    )
+                                else:
+                                    collection['documents'].append(table_text_clean)
+                                    collection['embeddings'].append(tbl_embedding)
+                                    collection['metadatas'].append(tbl_metadata)
+                                    collection['importance_scores'].append(tbl_importance)
+                                
+                                logger.debug(f"    [TABLE EMB] #{tbl_idx}: slide {tbl['slide_num']}, {tbl['row_count']} rows")
+                            
+                            # Limpiar tablas almacenadas
+                            self._last_pptx_tables = []
                     else:
                         # Sin contenido extraído - usar solo título como documento
                         embedding = self.embedding_model.encode(text).tolist()
