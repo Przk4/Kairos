@@ -1,21 +1,24 @@
 """
 Kairos OCR Service — Image-to-text extraction with math formula support.
 
-Primary:   GPT-4o-mini vision API (best for math formulas, tables, diagrams)
-Fallback:  pytesseract local OCR
+Engine:  Surya OCR  (local, no external API calls)
+  - RecognitionPredictor  → general text (printed documents)
+  - TexifyPredictor       → math formulas / equations → LaTeX output
 
 Used by:
-  - Chat image uploads
-  - Extension screenshot capture
-  - RAG pipeline (image files from Canvas, images embedded in PPTX/PDF)
+  - Chat image uploads          (views.py  → extract_text / extract_text_from_base64)
+  - Extension screenshot capture (views.py  → extract_text_from_base64)
+  - RAG pipeline                 (rag_service.py → extract_text, extract_images_from_pptx/pdf)
+
+All processing runs on-server (CPU or GPU). No external API keys required.
 """
 
-import os
 import io
-import re
 import base64
 import logging
 from typing import Optional
+
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -26,76 +29,172 @@ _ocr_service_instance = None
 
 
 def get_ocr_service():
+    """Return the shared OCRService instance (lazy-initialised)."""
     global _ocr_service_instance
     if _ocr_service_instance is None:
         _ocr_service_instance = OCRService()
     return _ocr_service_instance
 
 
-class OCRService:
-    """Extracts text (including LaTeX math, tables, code) from images."""
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-    VISION_SYSTEM_PROMPT = (
-        "You are an expert OCR assistant specialised in academic content. "
-        "Extract ALL text from the image accurately.\n\n"
-        "Rules:\n"
-        "- Wrap math formulas in LaTeX: inline $...$ or display $$...$$\n"
-        "- Reproduce tables as Markdown pipe tables\n"
-        "- Keep original language (Spanish / English)\n"
-        "- Preserve numbered lists, bullet points, headings\n"
-        "- If there is a graph or diagram, describe it briefly\n"
-        "- Output ONLY the extracted content, no commentary"
-    )
+def _pil_from_bytes(image_bytes: bytes) -> Image.Image:
+    """Open raw bytes as a PIL Image converted to RGB."""
+    img = Image.open(io.BytesIO(image_bytes))
+    if img.mode in ("RGBA", "LA", "P"):
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        if img.mode == "P":
+            img = img.convert("RGBA")
+        bg.paste(img, mask=img.split()[-1] if "A" in img.mode else None)
+        img = bg
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+    return img
+
+
+def _has_math(text: str) -> bool:
+    """Quick heuristic: does *text* look like it contains math symbols?"""
+    math_indicators = {
+        "∫", "∑", "∏", "√", "∞", "≠", "≤", "≥", "±", "∈", "∉",
+        "⊂", "⊃", "∪", "∩", "∀", "∃", "∂", "∇", "⊕", "⊗",
+        "α", "β", "γ", "δ", "θ", "λ", "μ", "σ", "φ", "ω",
+        "Σ", "Π", "Δ", "Ω",
+    }
+    if any(ch in text for ch in math_indicators):
+        return True
+    # Common LaTeX-ish fragments that Surya may partially recognise
+    import re
+    return bool(re.search(
+        r"\\frac|\\int|\\sum|\\sqrt|\\lim|\\alpha|\\beta|\\theta|\\sigma"
+        r"|\\begin\{|\\end\{|\^\{|_\{",
+        text,
+    ))
+
+
+# ---------------------------------------------------------------------------
+# OCRService
+# ---------------------------------------------------------------------------
+
+class OCRService:
+    """
+    Reusable OCR module for Kairos.
+
+    Public API (stable — used by views.py & rag_service.py):
+        extract_text(image_bytes)          → str
+        extract_text_from_base64(b64_str)  → str
+        extract_images_from_pptx(pptx_bytes) → list[dict]
+        extract_images_from_pdf(pdf_bytes)   → list[dict]
+    """
 
     def __init__(self):
-        # Use local Tesseract (pytesseract + Pillow) as the PRIMARY OCR engine.
-        # GPT/vision integration has been disabled to avoid external API costs.
-        # To re-enable vision-based OCR, restore `_init_openai()` and ensure
-        # `OPENAI_API_KEY` is set. The old vision method remains in the file
-        # for reference but is not called by default.
-        self.openai_client = None
-        self.vision_model = None
+        # Predictors are loaded lazily on first use to avoid slow import
+        # at Django startup and to keep memory footprint low when OCR is
+        # not needed.
+        self._recognition_predictor = None
+        self._detection_predictor = None
+        self._texify_predictor = None
+        self._foundation_predictor = None
 
     # ------------------------------------------------------------------
-    # Initialisation
+    # Lazy model loading
     # ------------------------------------------------------------------
-    def _init_openai(self):
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        if not api_key:
-            logger.warning("[OCR] OPENAI_API_KEY not set — vision OCR unavailable, will use fallback")
-            return
-        try:
-            import openai
-            self.openai_client = openai.OpenAI(api_key=api_key)
-            logger.info("[OCR] GPT-4o-mini vision initialised")
-        except Exception as e:
-            logger.error(f"[OCR] Failed to init OpenAI client: {e}")
+
+    def _get_recognition(self):
+        """Load Surya recognition + detection predictors on first call."""
+        if self._recognition_predictor is None:
+            from surya.recognition import RecognitionPredictor
+            from surya.detection import DetectionPredictor
+            from surya.foundation import FoundationPredictor
+
+            logger.info("[OCR] Loading Surya recognition models …")
+            self._foundation_predictor = FoundationPredictor()
+            self._recognition_predictor = RecognitionPredictor(self._foundation_predictor)
+            self._detection_predictor = DetectionPredictor()
+            logger.info("[OCR] Surya recognition models ready")
+        return self._recognition_predictor, self._detection_predictor
+
+    def _get_texify(self):
+        """Load Surya TexifyPredictor (LaTeX OCR) on first call."""
+        if self._texify_predictor is None:
+            from surya.texify import TexifyPredictor
+
+            logger.info("[OCR] Loading Surya TexifyPredictor (LaTeX) …")
+            self._texify_predictor = TexifyPredictor()
+            logger.info("[OCR] TexifyPredictor ready")
+        return self._texify_predictor
+
+    # ------------------------------------------------------------------
+    # Internal extraction
+    # ------------------------------------------------------------------
+
+    def _surya_ocr(self, img: Image.Image) -> str:
+        """Run Surya general OCR on a single PIL image → plain text."""
+        rec, det = self._get_recognition()
+        predictions = rec([img], det_predictor=det)
+        if not predictions:
+            return ""
+        lines = []
+        for pred in predictions:
+            for line in getattr(pred, "text_lines", []):
+                lines.append(line.text)
+        return "\n".join(lines).strip()
+
+    def _surya_latex(self, img: Image.Image) -> str:
+        """Run TexifyPredictor on a single PIL image → LaTeX string."""
+        texify = self._get_texify()
+        results = texify([img])
+        if not results:
+            return ""
+        # results is a list (one per image); each item has .text
+        return results[0].text.strip() if hasattr(results[0], "text") else str(results[0]).strip()
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def extract_text(self, image_bytes: bytes, *, detail: str = "high") -> str:
+
+    def extract_text(self, image_bytes: bytes, **kwargs) -> str:
         """
-        Main entry point.  Returns extracted text (with LaTeX for math).
-        *detail*: 'low' | 'high' | 'auto' — controls GPT-4o-mini resolution.
+        Main entry point.  Returns extracted text.
+
+        1. Run Surya general OCR.
+        2. If the result contains math symbols / partial formulas,
+           also run TexifyPredictor on the full image and merge
+           the LaTeX output into the response.
+
+        Any extra **kwargs (e.g. ``detail``) are accepted for
+        backwards-compatibility but ignored (Surya doesn't need them).
         """
         if not image_bytes:
             return ""
 
-        # Primary: use local Tesseract (pytesseract). This avoids external
-        # API usage and keeps OCR processing on your server.
-        result = self._extract_with_tesseract(image_bytes)
-        if result:
-            return result
+        try:
+            img = _pil_from_bytes(image_bytes)
+        except Exception as e:
+            logger.error(f"[OCR] Cannot open image: {e}")
+            return ""
 
-        # If Tesseract failed to extract text, we intentionally DO NOT call
-        # any external vision LLM here to avoid incurring API costs.
-        logger.warning("[OCR] Tesseract extraction returned empty; vision OCR disabled")
-        return ""
+        # Step 1 — general OCR
+        text = self._surya_ocr(img)
+        logger.info(f"[OCR-Surya] Extracted {len(text)} chars")
 
-    def extract_text_from_base64(self, b64_string: str, *, detail: str = "high") -> str:
-        """Convenience: accept a base64 data-URI or raw b64 string."""
-        # Strip data URI prefix if present
+        # Step 2 — if math detected, run TexifyPredictor for LaTeX
+        if text and _has_math(text):
+            try:
+                latex = self._surya_latex(img)
+                if latex:
+                    logger.info(f"[OCR-Texify] LaTeX extracted ({len(latex)} chars)")
+                    # Append LaTeX block so downstream consumers
+                    # (chat, embeddings) get both plain text and formulas.
+                    text = f"{text}\n\n$$\n{latex}\n$$"
+            except Exception as e:
+                logger.warning(f"[OCR-Texify] LaTeX extraction failed: {e}")
+
+        return text
+
+    def extract_text_from_base64(self, b64_string: str, **kwargs) -> str:
+        """Accept a base64 data-URI or raw base64 string → extracted text."""
         if "," in b64_string and b64_string.startswith("data:"):
             b64_string = b64_string.split(",", 1)[1]
         try:
@@ -103,104 +202,18 @@ class OCRService:
         except Exception as e:
             logger.error(f"[OCR] Invalid base64: {e}")
             return ""
-        return self.extract_text(raw, detail=detail)
+        return self.extract_text(raw)
 
     # ------------------------------------------------------------------
-    # GPT-4o-mini vision
+    # PPTX image extraction
     # ------------------------------------------------------------------
-    def _extract_with_vision(self, image_bytes: bytes, *, detail: str = "high") -> Optional[str]:
-        try:
-            b64 = base64.b64encode(image_bytes).decode()
 
-            # Detect MIME type
-            mime = "image/png"
-            if image_bytes[:3] == b'\xff\xd8\xff':
-                mime = "image/jpeg"
-            elif image_bytes[:4] == b'\x89PNG':
-                mime = "image/png"
-            elif image_bytes[:4] == b'RIFF' and image_bytes[8:12] == b'WEBP':
-                mime = "image/webp"
-
-            data_uri = f"data:{mime};base64,{b64}"
-
-            response = self.openai_client.chat.completions.create(
-                model=self.vision_model,
-                messages=[
-                    {"role": "system", "content": self.VISION_SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": data_uri, "detail": detail},
-                            },
-                            {
-                                "type": "text",
-                                "text": "Extract all text, math formulas (as LaTeX), and tables from this image.",
-                            },
-                        ],
-                    },
-                ],
-                max_tokens=4096,
-                temperature=0.1,
-            )
-
-            text = response.choices[0].message.content or ""
-            tokens = response.usage.total_tokens if response.usage else 0
-            logger.info(f"[OCR-Vision] Extracted {len(text)} chars, {tokens} tokens")
-            return text.strip()
-
-        except Exception as e:
-            logger.error(f"[OCR-Vision] Error: {e}")
-            return None
-
-    # ------------------------------------------------------------------
-    # Tesseract fallback
-    # ------------------------------------------------------------------
-    def _extract_with_tesseract(self, image_bytes: bytes) -> Optional[str]:
-        try:
-            from PIL import Image, ImageFilter, ImageEnhance
-            import pytesseract
-        except ImportError:
-            logger.info("[OCR-Tesseract] pytesseract or Pillow not installed — skipping")
-            return None
-
-        try:
-            img = Image.open(io.BytesIO(image_bytes))
-
-            # Convert to RGB if needed
-            if img.mode in ("RGBA", "LA", "P"):
-                bg = Image.new("RGB", img.size, (255, 255, 255))
-                if img.mode == "P":
-                    img = img.convert("RGBA")
-                bg.paste(img, mask=img.split()[-1] if "A" in img.mode else None)
-                img = bg
-
-            # Pre-processing: enhance contrast, sharpen
-            img = ImageEnhance.Contrast(img).enhance(1.5)
-            img = img.filter(ImageFilter.SHARPEN)
-
-            # OCR — Spanish + English
-            text = pytesseract.image_to_string(img, lang="spa+eng", config="--psm 6")
-            text = text.strip()
-            if text:
-                logger.info(f"[OCR-Tesseract] Extracted {len(text)} chars")
-            return text or None
-
-        except Exception as e:
-            logger.error(f"[OCR-Tesseract] Error: {e}")
-            return None
-
-    # ------------------------------------------------------------------
-    # PPTX image extraction helper
-    # ------------------------------------------------------------------
     def extract_images_from_pptx(self, pptx_bytes: bytes) -> list[dict]:
         """
-        Extract embedded images from a PPTX file.
-        Returns list of {'slide': int, 'text': str} for images that contain
-        readable text (diagrams, formulas, screenshots of text).
+        Extract embedded images from a PPTX and OCR them.
+        Returns ``[{'slide': int, 'text': str}, …]``.
         """
-        results = []
+        results: list[dict] = []
         try:
             from pptx import Presentation
             from pptx.enum.shapes import MSO_SHAPE_TYPE
@@ -211,15 +224,11 @@ class OCRService:
                     if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
                         try:
                             img_bytes = shape.image.blob
-                            # Skip tiny images (icons, bullets)
                             if len(img_bytes) < 5000:
                                 continue
-                            text = self.extract_text(img_bytes, detail="high")
+                            text = self.extract_text(img_bytes)
                             if text and len(text.strip()) > 20:
-                                results.append({
-                                    "slide": slide_num,
-                                    "text": text.strip(),
-                                })
+                                results.append({"slide": slide_num, "text": text.strip()})
                         except Exception as e:
                             logger.debug(f"[OCR-PPTX] Slide {slide_num} image error: {e}")
         except Exception as e:
@@ -227,35 +236,29 @@ class OCRService:
         return results
 
     # ------------------------------------------------------------------
-    # PDF image extraction helper
+    # PDF image extraction
     # ------------------------------------------------------------------
+
     def extract_images_from_pdf(self, pdf_bytes: bytes) -> list[dict]:
         """
         Extract embedded images from a PDF and OCR them.
-        Returns list of {'page': int, 'text': str}.
+        Returns ``[{'page': int, 'text': str}, …]``.
         """
-        results = []
+        results: list[dict] = []
         try:
             import pdfplumber
 
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 for page_num, page in enumerate(pdf.pages, 1):
-                    images = page.images
-                    if not images:
+                    if not page.images:
                         continue
-                    # Render page as image and OCR it if it has images
-                    # This captures diagrams, formulas, figures
                     try:
                         pil_img = page.to_image(resolution=200).original
                         buf = io.BytesIO()
                         pil_img.save(buf, format="PNG")
-                        img_bytes = buf.getvalue()
-                        text = self.extract_text(img_bytes, detail="high")
+                        text = self.extract_text(buf.getvalue())
                         if text and len(text.strip()) > 20:
-                            results.append({
-                                "page": page_num,
-                                "text": text.strip(),
-                            })
+                            results.append({"page": page_num, "text": text.strip()})
                     except Exception as e:
                         logger.debug(f"[OCR-PDF] Page {page_num} render error: {e}")
         except Exception as e:
