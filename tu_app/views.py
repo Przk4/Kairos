@@ -507,13 +507,51 @@ def chat_api(request):
     """
     API endpoint para manejar preguntas y respuestas de IA.
     POST: Envía una pregunta y recibe respuesta de DeepSeek con contexto RAG.
+    Supports JSON body or multipart/form-data (for image uploads).
     """
     try:
-        data = json.loads(request.body)
-        
-        question = data.get('question', '').strip()
-        course_id = data.get('course_id')
-        module_id = data.get('module_id')
+        # Parse request — support both JSON and multipart
+        image_bytes = None
+        image_ocr_text = None
+        content_type = request.content_type or ''
+
+        if 'multipart/form-data' in content_type:
+            question = request.POST.get('question', '').strip()
+            course_id = request.POST.get('course_id')
+            module_id = request.POST.get('module_id')
+            # Handle uploaded image
+            image_file = request.FILES.get('image')
+            if image_file:
+                image_bytes = image_file.read()
+        else:
+            data = json.loads(request.body)
+            question = data.get('question', '').strip()
+            course_id = data.get('course_id')
+            module_id = data.get('module_id')
+            # Handle base64 image (from extension)
+            b64_image = data.get('image_base64', '')
+            if b64_image:
+                import base64 as _b64
+                if ',' in b64_image and b64_image.startswith('data:'):
+                    b64_image = b64_image.split(',', 1)[1]
+                image_bytes = _b64.b64decode(b64_image)
+
+        # OCR the image if present
+        if image_bytes:
+            try:
+                from .ocr_service import get_ocr_service
+                ocr = get_ocr_service()
+                image_ocr_text = ocr.extract_text(image_bytes, detail="high")
+                logger.info(f"[CHAT] Image OCR: {len(image_ocr_text)} chars extracted")
+            except Exception as e:
+                logger.warning(f"[CHAT] Image OCR failed: {e}")
+
+        # Combine question with OCR text
+        if image_ocr_text:
+            if question:
+                question = f"{question}\n\n[Contenido de la imagen adjunta]:\n{image_ocr_text}"
+            else:
+                question = f"Analiza la siguiente imagen:\n\n{image_ocr_text}"
         
         if not question:
             return JsonResponse({'error': 'Pregunta vacía'}, status=400)
@@ -1812,6 +1850,25 @@ def extension_ask(request):
         data = json.loads(request.body)
         text = data.get('text', '').strip()
         canvas_course_id = data.get('canvas_course_id')
+        b64_image = data.get('image_base64', '')
+
+        # OCR screenshot/image if provided
+        image_ocr_text = None
+        if b64_image:
+            try:
+                from .ocr_service import get_ocr_service
+                ocr = get_ocr_service()
+                image_ocr_text = ocr.extract_text_from_base64(b64_image, detail="high")
+                logger.info(f"[EXT] Image OCR: {len(image_ocr_text)} chars")
+            except Exception as e:
+                logger.warning(f"[EXT] Image OCR failed: {e}")
+
+        # Combine text + image OCR
+        if image_ocr_text:
+            if text:
+                text = f"{text}\n\n[Contenido de la imagen]:\n{image_ocr_text}"
+            else:
+                text = f"Analiza la siguiente imagen:\n\n{image_ocr_text}"
 
         if not text:
             return JsonResponse({'error': 'Texto vacío'}, status=400)

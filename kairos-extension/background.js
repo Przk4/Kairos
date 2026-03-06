@@ -19,6 +19,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     getCourses(sendResponse);
     return true;
   }
+
+  if (message.type === 'KAIROS_CAPTURE_TAB') {
+    captureTab(sender, sendResponse);
+    return true;
+  }
 });
 
 async function handleAskKairos(message, sendResponse) {
@@ -51,7 +56,8 @@ async function handleAskKairos(message, sendResponse) {
     const body = {
       text: message.text,
       course_id: message.courseId || null,
-      canvas_course_id: message.canvasCourseId || null
+      canvas_course_id: message.canvasCourseId || null,
+      image_base64: message.imageBase64 || null
     };
 
     const response = await fetch(`${KAIROS_BASE}/api/extension/ask/`, {
@@ -105,5 +111,20 @@ async function getCourses(sendResponse) {
     sendResponse(data);
   } catch {
     sendResponse({ success: false, courses: [] });
+  }
+}
+
+async function captureTab(sender, sendResponse) {
+  try {
+    const tabId = sender.tab ? sender.tab.id : null;
+    if (!tabId) {
+      sendResponse(null);
+      return;
+    }
+    const dataUrl = await chrome.tabs.captureVisibleTab(sender.tab.windowId, { format: 'png' });
+    sendResponse(dataUrl);
+  } catch (err) {
+    console.error('[Kairos BG] captureTab error:', err);
+    sendResponse(null);
   }
 }

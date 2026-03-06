@@ -525,6 +525,9 @@ class RAGService:
             # Primero intenta por extensión de URL, luego por Content-Type si no tiene extensión clara
             file_lower = file_url.lower()
             content_type = response.headers.get('content-type', '').lower()
+
+            # Cache raw bytes for downstream image extraction (OCR)
+            self._last_file_bytes = file_content
             
             logger.info(f"[FILE TYPE DETECTION] URL ends with: ...{file_url[-50:]}, Content-Type: {content_type[:80] if content_type else 'unknown'}")
             
@@ -573,6 +576,23 @@ class RAGService:
                 decoded = file_content.decode('utf-8', errors='ignore')
                 logger.info(f"[TXT PROCESSING] ✅ {len(decoded)} chars")
                 return decoded
+
+            elif (file_lower.endswith(('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tiff'))
+                  or content_type.startswith('image/')):
+                logger.info(f"[IMAGE PROCESSING] Extracting text via OCR...")
+                try:
+                    from .ocr_service import get_ocr_service
+                    ocr = get_ocr_service()
+                    text = ocr.extract_text(file_content, detail="high")
+                    if text and text.strip():
+                        logger.info(f"[IMAGE PROCESSING] ✅ {len(text)} chars extracted via OCR")
+                        return text
+                    else:
+                        logger.warning(f"[IMAGE PROCESSING] ⚠ OCR returned no text")
+                        return None
+                except Exception as e:
+                    logger.error(f"[IMAGE PROCESSING] ❌ OCR failed: {e}")
+                    return None
             
             else:
                 # Unknown file type - try to detect and process accordingly
@@ -617,6 +637,20 @@ class RAGService:
                         return decoded
                 except UnicodeDecodeError:
                     pass
+
+                # Try as image (magic bytes: JPEG, PNG, WEBP)
+                if (file_content[:3] == b'\xff\xd8\xff'       # JPEG
+                    or file_content[:4] == b'\x89PNG'          # PNG
+                    or (file_content[:4] == b'RIFF' and file_content[8:12] == b'WEBP')):
+                    logger.info(f"[UNKNOWN] Detected as image (magic bytes) — running OCR")
+                    try:
+                        from .ocr_service import get_ocr_service
+                        ocr = get_ocr_service()
+                        text = ocr.extract_text(file_content, detail="high")
+                        if text and text.strip():
+                            return text
+                    except Exception as e:
+                        logger.warning(f"[UNKNOWN] OCR fallback failed: {e}")
                 
                 logger.warning(f"[UNKNOWN] ❌ Cannot determine file type or extract text")
                 return None
@@ -1105,6 +1139,67 @@ class RAGService:
                             
                             # Limpiar tablas almacenadas
                             self._last_pptx_tables = []
+
+                        # --- OCR embedded images (PPTX / PDF) ---
+                        # Extract text from embedded images (diagrams, formulas, screenshots)
+                        if item.url and extracted:
+                            try:
+                                from .ocr_service import get_ocr_service
+                                ocr = get_ocr_service()
+                                if ocr.openai_client:  # Only if vision is available
+                                    # Re-download file bytes for image extraction
+                                    file_lower_ocr = item.url.lower()
+                                    content_type_ocr = ''  # Already downloaded, use extension
+
+                                    ocr_images = []
+                                    # Get raw bytes from last download (cache in instance)
+                                    raw_bytes = getattr(self, '_last_file_bytes', None)
+                                    if raw_bytes:
+                                        if file_lower_ocr.endswith(('.pptx', '.ppt')):
+                                            ocr_images = ocr.extract_images_from_pptx(raw_bytes)
+                                        elif file_lower_ocr.endswith('.pdf'):
+                                            ocr_images = ocr.extract_images_from_pdf(raw_bytes)
+
+                                    for img_idx, img_data in enumerate(ocr_images):
+                                        img_text = img_data.get('text', '')
+                                        if not img_text or len(img_text.strip()) < 20:
+                                            continue
+                                        location = img_data.get('slide', img_data.get('page', '?'))
+                                        img_doc = f"{item.title} - Imagen (slide/página {location})\n\n{img_text}"
+                                        img_emb = self.embedding_model.encode(img_doc).tolist()
+                                        img_importance = 0.7
+                                        embeddings_count += 1
+
+                                        img_doc_id = f"item_{item.id}_img_{img_idx}"
+                                        img_meta = {
+                                            'item_id': str(item.id),
+                                            'item_title': item.title,
+                                            'item_type': item.get_item_type_display(),
+                                            'module_id': str(module.id),
+                                            'content_type': 'image_ocr',
+                                            'image_location': str(location),
+                                            'has_content': 'yes',
+                                            'importance_score': str(img_importance),
+                                        }
+
+                                        if self.using_chromadb and self.client:
+                                            collection.add(
+                                                ids=[img_doc_id],
+                                                embeddings=[img_emb],
+                                                documents=[img_doc],
+                                                metadatas=[img_meta]
+                                            )
+                                        else:
+                                            collection['documents'].append(img_doc)
+                                            collection['embeddings'].append(img_emb)
+                                            collection['metadatas'].append(img_meta)
+                                            collection['importance_scores'].append(img_importance)
+
+                                        logger.debug(f"    [IMG OCR] #{img_idx}: location {location}, {len(img_text)} chars")
+                                    if ocr_images:
+                                        logger.info(f"  [IMG OCR] Created {len(ocr_images)} image embeddings")
+                            except Exception as e:
+                                logger.warning(f"  [IMG OCR] Image extraction skipped: {e}")
                     else:
                         # Sin contenido extraído - usar solo título como documento
                         embedding = self.embedding_model.encode(text).tolist()

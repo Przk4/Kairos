@@ -233,8 +233,19 @@
                 </div>
             </div>
 
+            <!-- Image preview bar (shown when image attached) -->
+            <div id="imagePreviewBar" style="display:none; padding:8px 20px; background:#f0f2ff; border-top:1px solid #e5e7eb; display:none; align-items:center; gap:10px;">
+                <img id="imagePreviewThumb" style="height:48px; border-radius:8px; border:1px solid #e5e7eb;" alt="preview">
+                <span style="font-size:0.85em; color:#374151;" id="imagePreviewName">image.png</span>
+                <button onclick="clearImageAttachment()" style="margin-left:auto; background:none; border:none; font-size:1.2em; cursor:pointer; color:#9ca3af;" title="Quitar imagen">✕</button>
+            </div>
+
             <!-- Area de entrada de mensajes -->
             <div class="input-area">
+                <label for="imageInput" style="cursor:pointer; background:#f5f7fa; border:1px solid #e5e7eb; border-radius:12px; padding:10px 14px; display:flex; align-items:center; transition:background .15s;" title="Adjuntar imagen" onmouseover="this.style.background='#eef1ff'" onmouseout="this.style.background='#f5f7fa'">
+                    📷
+                </label>
+                <input type="file" id="imageInput" accept="image/*" style="display:none;" onchange="handleImageAttach(this)">
                 <input type="text" id="questionInput" placeholder="Escribe tu pregunta aquí..." onkeypress="handleKeyPress(event)">
                 <button onclick="sendQuestion()" id="sendBtn">Enviar</button>
             </div>
@@ -423,23 +434,63 @@
         return '';
     }
 
+    // ===== IMAGE ATTACHMENT STATE =====
+    let pendingImageFile = null;
+
+    function handleImageAttach(input) {
+        const file = input.files[0];
+        if (!file) return;
+        pendingImageFile = file;
+        const bar = document.getElementById('imagePreviewBar');
+        const thumb = document.getElementById('imagePreviewThumb');
+        const nameEl = document.getElementById('imagePreviewName');
+        thumb.src = URL.createObjectURL(file);
+        nameEl.textContent = file.name;
+        bar.style.display = 'flex';
+    }
+
+    function clearImageAttachment() {
+        pendingImageFile = null;
+        document.getElementById('imagePreviewBar').style.display = 'none';
+        document.getElementById('imageInput').value = '';
+    }
+
     function sendQuestion() {
         const input = document.getElementById('questionInput');
         const question = input.value.trim();
-        if (!question) { alert('Por favor escribe una pregunta'); return; }
+        if (!question && !pendingImageFile) { alert('Escribe una pregunta o adjunta una imagen'); return; }
 
         document.getElementById('typingIndicator').style.display = 'block';
         document.getElementById('sendBtn').disabled = true;
         input.disabled = true;
 
-        addMessageToChat(question, 'student');
+        const displayText = question || '📷 [Imagen adjunta]';
+        addMessageToChat(displayText, 'student');
         input.value = '';
 
-        fetch('/api/chat/', {
-            method: 'POST',
-            headers: { 'X-CSRFToken': getCSRFToken(), 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question, course_id: courseId, module_id: currentModuleId })
-        })
+        // Build request — use FormData if image attached, JSON otherwise
+        let fetchOpts;
+        if (pendingImageFile) {
+            const fd = new FormData();
+            fd.append('question', question);
+            fd.append('course_id', courseId);
+            if (currentModuleId) fd.append('module_id', currentModuleId);
+            fd.append('image', pendingImageFile);
+            fetchOpts = {
+                method: 'POST',
+                headers: { 'X-CSRFToken': getCSRFToken() },
+                body: fd
+            };
+            clearImageAttachment();
+        } else {
+            fetchOpts = {
+                method: 'POST',
+                headers: { 'X-CSRFToken': getCSRFToken(), 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question, course_id: courseId, module_id: currentModuleId })
+            };
+        }
+
+        fetch('/api/chat/', fetchOpts)
         .then(r => r.json())
         .then(data => {
             document.getElementById('typingIndicator').style.display = 'none';

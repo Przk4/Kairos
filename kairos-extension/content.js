@@ -266,6 +266,61 @@
     .kairos-answer tr:nth-child(even) { background: ${P.bgSoft}; }
     .kairos-answer hr { border: none; border-top: 1px solid ${P.border}; margin: .8em 0; }
     .kairos-answer img { max-width: 100%; border-radius: 8px; margin: .4em 0; }
+
+    /* ── Screenshot capture overlay ── */
+    .kairos-capture-overlay {
+      position: fixed;
+      top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(0,0,0,.3);
+      cursor: crosshair;
+      z-index: 2147483647;
+      pointer-events: auto;
+      display: none;
+    }
+    .kairos-capture-hint {
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: ${P.primary};
+      color: #fff;
+      padding: 10px 24px;
+      border-radius: 50px;
+      font: 600 13px/1 ${P.font};
+      box-shadow: 0 4px 16px ${P.shadow};
+      z-index: 2147483648;
+      pointer-events: none;
+      display: none;
+    }
+    .kairos-capture-rect {
+      position: fixed;
+      border: 2px solid ${P.primary};
+      background: rgba(51,85,255,.08);
+      z-index: 2147483647;
+      pointer-events: none;
+      display: none;
+    }
+
+    /* Camera FAB */
+    .kairos-cam-fab {
+      position: fixed;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      background: ${P.secondary};
+      color: #fff;
+      border: none;
+      border-radius: 50px;
+      font: 600 13px/1 ${P.font};
+      cursor: pointer;
+      box-shadow: 0 4px 20px rgba(246,85,139,.2), 0 2px 8px rgba(0,0,0,.08);
+      transition: all .2s ease;
+      pointer-events: auto;
+      z-index: 2147483647;
+      white-space: nowrap;
+    }
+    .kairos-cam-fab:hover { background: #e5436f; transform: translateY(-1px); }
   `;
   shadow.appendChild(style);
 
@@ -277,6 +332,26 @@
   fab.className = 'kairos-fab';
   fab.innerHTML = `<svg viewBox="0 0 24 24"><path d="M12 2L9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.64-7.03L22 9.24l-7.19-.61z"/></svg> Resolver con Kairos`;
   shadow.appendChild(fab);
+
+  // ── Camera FAB Button ──
+  const camFab = document.createElement('button');
+  camFab.className = 'kairos-cam-fab';
+  camFab.innerHTML = `📷 Capturar pantalla`;
+  shadow.appendChild(camFab);
+
+  // ── Screenshot capture overlay (lives in shadow DOM) ──
+  const captureOverlay = document.createElement('div');
+  captureOverlay.className = 'kairos-capture-overlay';
+  shadow.appendChild(captureOverlay);
+
+  const captureHint = document.createElement('div');
+  captureHint.className = 'kairos-capture-hint';
+  captureHint.textContent = 'Arrastra para seleccionar un área · Esc para cancelar';
+  shadow.appendChild(captureHint);
+
+  const captureRect = document.createElement('div');
+  captureRect.className = 'kairos-capture-rect';
+  shadow.appendChild(captureRect);
 
   // ── Popup ──
   const popup = document.createElement('div');
@@ -336,6 +411,8 @@
 
   let selectedText = '';
   let isPopupOpen = false;
+  let isCapturing = false;
+  let capturedImageB64 = null;
 
   // ── Detect Canvas course ID from URL ──
   function detectCanvasCourseId() {
@@ -345,7 +422,7 @@
 
   // ── Text selection → show FAB ──
   document.addEventListener('mouseup', (e) => {
-    if (isPopupOpen) return;
+    if (isPopupOpen || isCapturing) return;
     // Ignore clicks inside our own UI
     if (host.contains(e.target)) return;
 
@@ -356,6 +433,7 @@
       if (text.length > 5) {
         selectedText = text;
         fab.style.display = 'flex';
+        camFab.style.display = 'none';
         // Position near selection
         const range = sel.getRangeAt(0);
         const rect = range.getBoundingClientRect();
@@ -363,9 +441,26 @@
         fab.style.left = Math.min(window.innerWidth - 240, Math.max(8, rect.left)) + 'px';
       } else {
         fab.style.display = 'none';
+        // Show camera FAB at bottom-right when no text selected
+        camFab.style.display = 'flex';
+        camFab.style.bottom = '24px';
+        camFab.style.right = '24px';
+        camFab.style.top = 'auto';
+        camFab.style.left = 'auto';
       }
     }, 10);
   });
+
+  // Show camera FAB on load
+  setTimeout(() => {
+    if (!isPopupOpen) {
+      camFab.style.display = 'flex';
+      camFab.style.bottom = '24px';
+      camFab.style.right = '24px';
+      camFab.style.top = 'auto';
+      camFab.style.left = 'auto';
+    }
+  }, 1000);
 
   // Hide FAB on scroll or click elsewhere
   document.addEventListener('mousedown', (e) => {
@@ -386,6 +481,10 @@
     popup.style.top = '16vh';
     popup.style.right = '24px';
     popup.style.left = 'auto';
+
+    // Restore label for text mode
+    const label = shadow.querySelector('.kairos-selected-label');
+    if (label) label.textContent = 'Texto seleccionado';
 
     // Truncate preview if very long
     selectedTextEl.textContent = selectedText.length > 500
@@ -412,6 +511,12 @@
   function closePopup() {
     isPopupOpen = false;
     popup.style.display = 'none';
+    capturedImageB64 = null;
+    // Restore label for next use
+    const label = shadow.querySelector('.kairos-selected-label');
+    if (label) label.textContent = 'Texto seleccionado';
+    // Show camera FAB again
+    camFab.style.display = 'flex';
   }
 
   closeBtn.addEventListener('click', closePopup);
@@ -424,11 +529,19 @@
 
     const canvasCourseId = detectCanvasCourseId();
 
-    chrome.runtime.sendMessage({
+    const msg = {
       type: 'KAIROS_ASK',
       text: selectedText,
       canvasCourseId: canvasCourseId
-    }, (res) => {
+    };
+
+    // Attach screenshot image if captured
+    if (capturedImageB64) {
+      msg.imageBase64 = capturedImageB64;
+      capturedImageB64 = null;
+    }
+
+    chrome.runtime.sendMessage(msg, (res) => {
       loadingEl.style.display = 'none';
       resolveBtn.disabled = false;
 
@@ -450,8 +563,147 @@
 
   // ── Escape key closes popup ──
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && isPopupOpen) closePopup();
+    if (e.key === 'Escape') {
+      if (isCapturing) cancelCapture();
+      else if (isPopupOpen) closePopup();
+    }
   });
+
+  // ==========================================================================
+  // SCREENSHOT CAPTURE — Region selection like Windows Snipping Tool
+  // ==========================================================================
+
+  let captureStart = null;
+
+  camFab.addEventListener('click', () => {
+    camFab.style.display = 'none';
+    fab.style.display = 'none';
+    startCapture();
+  });
+
+  function startCapture() {
+    isCapturing = true;
+    captureOverlay.style.display = 'block';
+    captureHint.style.display = 'block';
+    captureRect.style.display = 'none';
+  }
+
+  function cancelCapture() {
+    isCapturing = false;
+    captureOverlay.style.display = 'none';
+    captureHint.style.display = 'none';
+    captureRect.style.display = 'none';
+    captureStart = null;
+    // Show camera FAB again
+    camFab.style.display = 'flex';
+  }
+
+  captureOverlay.addEventListener('mousedown', (e) => {
+    captureStart = { x: e.clientX, y: e.clientY };
+    captureRect.style.display = 'block';
+    captureRect.style.left = e.clientX + 'px';
+    captureRect.style.top = e.clientY + 'px';
+    captureRect.style.width = '0';
+    captureRect.style.height = '0';
+  });
+
+  captureOverlay.addEventListener('mousemove', (e) => {
+    if (!captureStart) return;
+    const x = Math.min(captureStart.x, e.clientX);
+    const y = Math.min(captureStart.y, e.clientY);
+    const w = Math.abs(e.clientX - captureStart.x);
+    const h = Math.abs(e.clientY - captureStart.y);
+    captureRect.style.left = x + 'px';
+    captureRect.style.top = y + 'px';
+    captureRect.style.width = w + 'px';
+    captureRect.style.height = h + 'px';
+  });
+
+  captureOverlay.addEventListener('mouseup', (e) => {
+    if (!captureStart) return;
+    const x = Math.min(captureStart.x, e.clientX);
+    const y = Math.min(captureStart.y, e.clientY);
+    const w = Math.abs(e.clientX - captureStart.x);
+    const h = Math.abs(e.clientY - captureStart.y);
+    captureStart = null;
+
+    // Ignore tiny selections (accidental clicks)
+    if (w < 20 || h < 20) {
+      cancelCapture();
+      return;
+    }
+
+    // Hide overlay before capture so it's not in the screenshot
+    captureOverlay.style.display = 'none';
+    captureHint.style.display = 'none';
+    captureRect.style.display = 'none';
+    host.style.display = 'none';
+
+    // Ask background to capture the visible tab
+    setTimeout(() => {
+      chrome.runtime.sendMessage({ type: 'KAIROS_CAPTURE_TAB' }, (dataUrl) => {
+        host.style.display = '';
+        isCapturing = false;
+
+        if (!dataUrl) {
+          cancelCapture();
+          return;
+        }
+
+        // Crop the region from the full-page screenshot
+        cropImage(dataUrl, x, y, w, h, window.devicePixelRatio || 1)
+          .then((croppedB64) => {
+            capturedImageB64 = croppedB64;
+            selectedText = '';
+            openPopupWithImage(croppedB64);
+          })
+          .catch(() => cancelCapture());
+      });
+    }, 80); // Small delay so the overlay is gone before capture
+  });
+
+  function cropImage(dataUrl, x, y, w, h, dpr) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, x * dpr, y * dpr, w * dpr, h * dpr, 0, 0, w * dpr, h * dpr);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.onerror = reject;
+      img.src = dataUrl;
+    });
+  }
+
+  function openPopupWithImage(imgDataUrl) {
+    isPopupOpen = true;
+    popup.style.display = 'flex';
+    popup.style.top = '16vh';
+    popup.style.right = '24px';
+    popup.style.left = 'auto';
+
+    // Show image preview instead of text
+    const label = shadow.querySelector('.kairos-selected-label');
+    label.textContent = 'Captura de pantalla';
+    selectedTextEl.innerHTML = `<img src="${imgDataUrl}" style="max-width:100%;max-height:160px;border-radius:8px;">`;
+
+    responseEl.style.display = 'none';
+    loadingEl.style.display = 'none';
+    resolveBtn.disabled = false;
+
+    chrome.runtime.sendMessage({ type: 'KAIROS_CHECK_AUTH' }, (res) => {
+      if (res && res.authenticated) {
+        authEl.style.display = 'none';
+        mainEl.style.display = 'block';
+      } else {
+        authEl.style.display = 'flex';
+        mainEl.style.display = 'none';
+      }
+    });
+  }
 
   // ── Minimal Markdown → HTML renderer ──
   function miniMarkdown(text) {
