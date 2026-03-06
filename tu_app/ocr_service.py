@@ -48,9 +48,13 @@ class OCRService:
     )
 
     def __init__(self):
+        # Use local Tesseract (pytesseract + Pillow) as the PRIMARY OCR engine.
+        # GPT/vision integration has been disabled to avoid external API costs.
+        # To re-enable vision-based OCR, restore `_init_openai()` and ensure
+        # `OPENAI_API_KEY` is set. The old vision method remains in the file
+        # for reference but is not called by default.
         self.openai_client = None
-        self.vision_model = "gpt-4o-mini"
-        self._init_openai()
+        self.vision_model = None
 
     # ------------------------------------------------------------------
     # Initialisation
@@ -78,18 +82,15 @@ class OCRService:
         if not image_bytes:
             return ""
 
-        # Try vision LLM first
-        if self.openai_client:
-            result = self._extract_with_vision(image_bytes, detail=detail)
-            if result:
-                return result
-
-        # Fallback: pytesseract
+        # Primary: use local Tesseract (pytesseract). This avoids external
+        # API usage and keeps OCR processing on your server.
         result = self._extract_with_tesseract(image_bytes)
         if result:
             return result
 
-        logger.warning("[OCR] All extraction methods failed")
+        # If Tesseract failed to extract text, we intentionally DO NOT call
+        # any external vision LLM here to avoid incurring API costs.
+        logger.warning("[OCR] Tesseract extraction returned empty; vision OCR disabled")
         return ""
 
     def extract_text_from_base64(self, b64_string: str, *, detail: str = "high") -> str:
