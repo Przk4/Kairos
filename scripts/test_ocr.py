@@ -51,10 +51,16 @@ def main():
         print(f"    ✗ RecognitionPredictor import FAILED: {e}")
 
     try:
-        from surya.texify import TexifyPredictor
-        print("    ✓ TexifyPredictor importable")
+        from surya.common.surya.schema import TaskNames
+        print(f"    ✓ TaskNames importable (LaTeX task = {TaskNames.block_without_boxes})")
     except ImportError as e:
-        print(f"    ✗ TexifyPredictor import FAILED: {e}")
+        print(f"    ✗ TaskNames import FAILED: {e}")
+
+    try:
+        import transformers
+        print(f"    ✓ transformers version: {transformers.__version__}")
+    except ImportError as e:
+        print(f"    ✗ transformers FAILED: {e}")
 
     # 2. Create a test image with text and a "formula-like" region
     print("\n[2] Creating test image...")

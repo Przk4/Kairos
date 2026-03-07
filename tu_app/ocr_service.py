@@ -4,7 +4,7 @@ Kairos OCR Service — Image-to-text extraction with math formula support.
 Engine:  Surya OCR  (local, no external API calls)
   - LayoutPredictor       → detect regions (Text vs Equation)
   - RecognitionPredictor  → general text for Text regions
-  - TexifyPredictor       → math formulas / equations → LaTeX output
+  - RecognitionPredictor  → LaTeX for Equation regions (TaskNames.block_without_boxes)
 
 Pipeline:
   1. LayoutPredictor segments the image into regions.
@@ -123,7 +123,6 @@ class OCRService:
         self._recognition_predictor = None
         self._detection_predictor = None
         self._recognition_foundation = None
-        self._texify_predictor = None
 
     # ------------------------------------------------------------------
     # Lazy model loading
@@ -155,16 +154,6 @@ class OCRService:
             logger.info("[OCR] Recognition models ready")
         return self._recognition_predictor, self._detection_predictor
 
-    def _get_texify(self):
-        """Load Surya TexifyPredictor (LaTeX OCR)."""
-        if self._texify_predictor is None:
-            from surya.texify import TexifyPredictor
-
-            logger.info("[OCR] Loading TexifyPredictor (LaTeX) …")
-            self._texify_predictor = TexifyPredictor()
-            logger.info("[OCR] TexifyPredictor ready")
-        return self._texify_predictor
-
     # ------------------------------------------------------------------
     # Internal: per-region extraction
     # ------------------------------------------------------------------
@@ -182,20 +171,25 @@ class OCRService:
         return "\n".join(lines).strip()
 
     def _ocr_equation_region(self, img: Image.Image) -> str:
-        """Run TexifyPredictor on a cropped equation region → LaTeX."""
-        texify = self._get_texify()
-        results = texify([img])
-        if not results:
+        """Run RecognitionPredictor in LaTeX mode (TaskNames.block_without_boxes)."""
+        try:
+            from surya.common.surya.schema import TaskNames
+        except ImportError:
+            logger.warning("[OCR] TaskNames not available; falling back to text OCR for equation")
+            return self._ocr_text_region(img)
+
+        rec, _ = self._get_recognition()
+        tasks = [TaskNames.block_without_boxes]
+        preds = rec([img], tasks)
+        if not preds:
             return ""
-        # Collect all text_lines from the result
-        result = results[0]
         parts = []
-        for line in getattr(result, "text_lines", []):
-            parts.append(line.text)
+        for pred in preds:
+            for line in getattr(pred, "text_lines", []):
+                parts.append(line.text)
         raw = "\n".join(parts).strip() if parts else ""
         if not raw:
-            # Fallback: older API returns .text directly
-            raw = getattr(result, "text", "").strip()
+            raw = getattr(preds[0], "text", "").strip()
         return _texify_tags_to_latex(raw) if raw else ""
 
     # ------------------------------------------------------------------

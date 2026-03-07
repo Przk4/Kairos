@@ -42,6 +42,9 @@ pip install --upgrade "torch" --index-url https://download.pytorch.org/whl/cpu
 echo "Installing python requirements..."
 pip install -r requirements.txt
 
+# Ensure transformers is pinned below 5.x (surya-ocr compat)
+pip install "transformers>=4.56.1,<5.0.0"
+
 echo "Installation complete."
 
 if [ "$RESTART" -eq 1 ]; then
