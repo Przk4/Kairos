@@ -2,21 +2,33 @@
 Kairos OCR Service — Image-to-text extraction with math formula support.
 
 Engine:  Surya OCR  (local, no external API calls)
-  - RecognitionPredictor  → general text (printed documents)
+  - LayoutPredictor       → detect regions (Text vs Equation)
+  - RecognitionPredictor  → general text for Text regions
   - TexifyPredictor       → math formulas / equations → LaTeX output
+
+Pipeline:
+  1. LayoutPredictor segments the image into regions.
+  2. Regions labelled "Equation" are cropped and sent to TexifyPredictor
+     to produce LaTeX (wrapped in $$ delimiters).
+  3. Other regions are cropped and sent to RecognitionPredictor for
+     plain-text OCR.
+  4. Fallback: if RecognitionPredictor output looks garbled (high ratio
+     of non-alphanumeric characters), the region is re-processed with
+     TexifyPredictor.
+  5. All fragments are assembled in reading order.
 
 Used by:
   - Chat image uploads          (views.py  → extract_text / extract_text_from_base64)
   - Extension screenshot capture (views.py  → extract_text_from_base64)
   - RAG pipeline                 (rag_service.py → extract_text, extract_images_from_pptx/pdf)
 
-All processing runs on-server (CPU or GPU). No external API keys required.
+All processing runs on-server (CPU or GPU).  No external API keys required.
 """
 
 import io
+import re
 import base64
 import logging
-from typing import Optional
 
 from PIL import Image
 
@@ -54,23 +66,38 @@ def _pil_from_bytes(image_bytes: bytes) -> Image.Image:
     return img
 
 
-def _has_math(text: str) -> bool:
-    """Quick heuristic: does *text* look like it contains math symbols?"""
-    math_indicators = {
-        "∫", "∑", "∏", "√", "∞", "≠", "≤", "≥", "±", "∈", "∉",
-        "⊂", "⊃", "∪", "∩", "∀", "∃", "∂", "∇", "⊕", "⊗",
-        "α", "β", "γ", "δ", "θ", "λ", "μ", "σ", "φ", "ω",
-        "Σ", "Π", "Δ", "Ω",
-    }
-    if any(ch in text for ch in math_indicators):
-        return True
-    # Common LaTeX-ish fragments that Surya may partially recognise
-    import re
-    return bool(re.search(
-        r"\\frac|\\int|\\sum|\\sqrt|\\lim|\\alpha|\\beta|\\theta|\\sigma"
-        r"|\\begin\{|\\end\{|\^\{|_\{",
-        text,
-    ))
+# Labels that LayoutPredictor assigns to math / equation regions.
+_EQUATION_LABELS = {"Equation", "Formula", "TextInlineMath"}
+
+
+def _looks_garbled(text: str, threshold: float = 0.45) -> bool:
+    """
+    Return True if *text* looks like garbled OCR output — i.e. the
+    recognition model failed to interpret math symbols correctly.
+
+    Heuristic: if more than *threshold* of the non-whitespace characters
+    are **not** alphanumeric and not common punctuation, assume it is math
+    that was poorly decoded.
+    """
+    stripped = re.sub(r"\s+", "", text)
+    if len(stripped) < 3:
+        return False
+    normal_chars = sum(
+        1 for ch in stripped
+        if ch.isalnum() or ch in ".,;:!?¿¡'\"-()[]{}/"
+    )
+    return (normal_chars / len(stripped)) < (1.0 - threshold)
+
+
+def _texify_tags_to_latex(text: str) -> str:
+    """
+    Convert Surya/Texify ``<math>…</math>`` tags to standard LaTeX
+    delimiters (``$$…$$`` for display, ``$…$`` for inline).
+    """
+    text = re.sub(r'<math\s+display="block">(.*?)</math>', r'$$\1$$', text, flags=re.DOTALL)
+    text = re.sub(r'<math\s+display="inline">(.*?)</math>', r'$\1$', text, flags=re.DOTALL)
+    text = re.sub(r'<math>(.*?)</math>', r'$\1$', text, flags=re.DOTALL)
+    return text.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -82,73 +109,94 @@ class OCRService:
     Reusable OCR module for Kairos.
 
     Public API (stable — used by views.py & rag_service.py):
-        extract_text(image_bytes)          → str
-        extract_text_from_base64(b64_str)  → str
+        extract_text(image_bytes)            → str
+        extract_text_from_base64(b64_str)    → str
         extract_images_from_pptx(pptx_bytes) → list[dict]
         extract_images_from_pdf(pdf_bytes)   → list[dict]
     """
 
     def __init__(self):
-        # Predictors are loaded lazily on first use to avoid slow import
-        # at Django startup and to keep memory footprint low when OCR is
-        # not needed.
+        # All predictors are loaded lazily to avoid slow imports at
+        # Django startup and to keep memory low when OCR is unused.
+        self._layout_predictor = None
+        self._layout_foundation = None
         self._recognition_predictor = None
         self._detection_predictor = None
+        self._recognition_foundation = None
         self._texify_predictor = None
-        self._foundation_predictor = None
 
     # ------------------------------------------------------------------
     # Lazy model loading
     # ------------------------------------------------------------------
 
+    def _get_layout(self):
+        """Load Surya LayoutPredictor on first call."""
+        if self._layout_predictor is None:
+            from surya.layout import LayoutPredictor
+            from surya.foundation import FoundationPredictor
+
+            logger.info("[OCR] Loading Surya LayoutPredictor …")
+            self._layout_foundation = FoundationPredictor()
+            self._layout_predictor = LayoutPredictor(self._layout_foundation)
+            logger.info("[OCR] LayoutPredictor ready")
+        return self._layout_predictor
+
     def _get_recognition(self):
-        """Load Surya recognition + detection predictors on first call."""
+        """Load Surya RecognitionPredictor + DetectionPredictor."""
         if self._recognition_predictor is None:
             from surya.recognition import RecognitionPredictor
             from surya.detection import DetectionPredictor
             from surya.foundation import FoundationPredictor
 
             logger.info("[OCR] Loading Surya recognition models …")
-            self._foundation_predictor = FoundationPredictor()
-            self._recognition_predictor = RecognitionPredictor(self._foundation_predictor)
+            self._recognition_foundation = FoundationPredictor()
+            self._recognition_predictor = RecognitionPredictor(self._recognition_foundation)
             self._detection_predictor = DetectionPredictor()
-            logger.info("[OCR] Surya recognition models ready")
+            logger.info("[OCR] Recognition models ready")
         return self._recognition_predictor, self._detection_predictor
 
     def _get_texify(self):
-        """Load Surya TexifyPredictor (LaTeX OCR) on first call."""
+        """Load Surya TexifyPredictor (LaTeX OCR)."""
         if self._texify_predictor is None:
             from surya.texify import TexifyPredictor
 
-            logger.info("[OCR] Loading Surya TexifyPredictor (LaTeX) …")
+            logger.info("[OCR] Loading TexifyPredictor (LaTeX) …")
             self._texify_predictor = TexifyPredictor()
             logger.info("[OCR] TexifyPredictor ready")
         return self._texify_predictor
 
     # ------------------------------------------------------------------
-    # Internal extraction
+    # Internal: per-region extraction
     # ------------------------------------------------------------------
 
-    def _surya_ocr(self, img: Image.Image) -> str:
-        """Run Surya general OCR on a single PIL image → plain text."""
+    def _ocr_text_region(self, img: Image.Image) -> str:
+        """Run RecognitionPredictor on a cropped text region."""
         rec, det = self._get_recognition()
-        predictions = rec([img], det_predictor=det)
-        if not predictions:
+        preds = rec([img], det_predictor=det)
+        if not preds:
             return ""
         lines = []
-        for pred in predictions:
+        for pred in preds:
             for line in getattr(pred, "text_lines", []):
                 lines.append(line.text)
         return "\n".join(lines).strip()
 
-    def _surya_latex(self, img: Image.Image) -> str:
-        """Run TexifyPredictor on a single PIL image → LaTeX string."""
+    def _ocr_equation_region(self, img: Image.Image) -> str:
+        """Run TexifyPredictor on a cropped equation region → LaTeX."""
         texify = self._get_texify()
         results = texify([img])
         if not results:
             return ""
-        # results is a list (one per image); each item has .text
-        return results[0].text.strip() if hasattr(results[0], "text") else str(results[0]).strip()
+        # Collect all text_lines from the result
+        result = results[0]
+        parts = []
+        for line in getattr(result, "text_lines", []):
+            parts.append(line.text)
+        raw = "\n".join(parts).strip() if parts else ""
+        if not raw:
+            # Fallback: older API returns .text directly
+            raw = getattr(result, "text", "").strip()
+        return _texify_tags_to_latex(raw) if raw else ""
 
     # ------------------------------------------------------------------
     # Public API
@@ -156,15 +204,17 @@ class OCRService:
 
     def extract_text(self, image_bytes: bytes, **kwargs) -> str:
         """
-        Main entry point.  Returns extracted text.
+        Main entry point.  Returns extracted text with LaTeX for maths.
 
-        1. Run Surya general OCR.
-        2. If the result contains math symbols / partial formulas,
-           also run TexifyPredictor on the full image and merge
-           the LaTeX output into the response.
+        Pipeline:
+          1. LayoutPredictor segments the image into labelled regions.
+          2. Equation regions → TexifyPredictor → LaTeX ($$…$$).
+          3. Text regions → RecognitionPredictor → plain text.
+             - If OCR output looks garbled, retry with TexifyPredictor.
+          4. Assemble fragments in reading order.
 
-        Any extra **kwargs (e.g. ``detail``) are accepted for
-        backwards-compatibility but ignored (Surya doesn't need them).
+        Any extra **kwargs are accepted for backwards-compatibility but
+        are ignored (Surya does not need them).
         """
         if not image_bytes:
             return ""
@@ -175,23 +225,71 @@ class OCRService:
             logger.error(f"[OCR] Cannot open image: {e}")
             return ""
 
-        # Step 1 — general OCR
-        text = self._surya_ocr(img)
-        logger.info(f"[OCR-Surya] Extracted {len(text)} chars")
+        # ----- Step 1: Layout detection -----
+        try:
+            layout = self._get_layout()
+            layout_results = layout([img])
+            boxes = layout_results[0].bboxes if layout_results else []
+        except Exception as e:
+            logger.warning(f"[OCR] Layout detection failed, falling back to full-image OCR: {e}")
+            boxes = []
 
-        # Step 2 — if math detected, run TexifyPredictor for LaTeX
-        if text and _has_math(text):
-            try:
-                latex = self._surya_latex(img)
+        # If layout found no regions, treat the whole image as one region
+        if not boxes:
+            text = self._ocr_text_region(img)
+            if _looks_garbled(text):
+                logger.info("[OCR] Full-image OCR looks garbled → trying TexifyPredictor")
+                latex = self._ocr_equation_region(img)
+                return latex if latex else text
+            return text
+
+        # ----- Step 2 & 3: Process each region in reading order -----
+        sorted_boxes = sorted(boxes, key=lambda b: b.position)
+        fragments: list[str] = []
+
+        for box in sorted_boxes:
+            label = box.label
+            bbox = box.bbox  # [x_min, y_min, x_max, y_max]
+
+            # Crop with a small padding to avoid cutting edges
+            pad = 4
+            x0 = max(0, int(bbox[0]) - pad)
+            y0 = max(0, int(bbox[1]) - pad)
+            x1 = min(img.width, int(bbox[2]) + pad)
+            y1 = min(img.height, int(bbox[3]) + pad)
+            cropped = img.crop((x0, y0, x1, y1))
+
+            if cropped.width < 10 or cropped.height < 10:
+                continue
+
+            if label in _EQUATION_LABELS:
+                # ---- Equation region → TexifyPredictor ----
+                latex = self._ocr_equation_region(cropped)
                 if latex:
-                    logger.info(f"[OCR-Texify] LaTeX extracted ({len(latex)} chars)")
-                    # Append LaTeX block so downstream consumers
-                    # (chat, embeddings) get both plain text and formulas.
-                    text = f"{text}\n\n$$\n{latex}\n$$"
-            except Exception as e:
-                logger.warning(f"[OCR-Texify] LaTeX extraction failed: {e}")
+                    # Wrap in display-math delimiters if not already wrapped
+                    if not latex.startswith("$"):
+                        latex = f"$${latex}$$"
+                    fragments.append(latex)
+                    logger.debug(f"[OCR] Equation region ({label}): {len(latex)} chars")
+            else:
+                # ---- Text region → RecognitionPredictor ----
+                text = self._ocr_text_region(cropped)
+                if text and _looks_garbled(text):
+                    # Garbled output → likely undetected math; retry
+                    logger.info(f"[OCR] Region '{label}' looks garbled → retrying with Texify")
+                    latex = self._ocr_equation_region(cropped)
+                    if latex:
+                        if not latex.startswith("$"):
+                            latex = f"$${latex}$$"
+                        fragments.append(latex)
+                        continue
+                if text:
+                    fragments.append(text)
+                    logger.debug(f"[OCR] Text region ({label}): {len(text)} chars")
 
-        return text
+        result = "\n\n".join(fragments).strip()
+        logger.info(f"[OCR] Total extracted: {len(result)} chars from {len(sorted_boxes)} regions")
+        return result
 
     def extract_text_from_base64(self, b64_string: str, **kwargs) -> str:
         """Accept a base64 data-URI or raw base64 string → extracted text."""
