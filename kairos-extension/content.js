@@ -641,25 +641,37 @@
 
     // Ask background to capture the visible tab
     setTimeout(() => {
-      chrome.runtime.sendMessage({ type: 'KAIROS_CAPTURE_TAB' }, (dataUrl) => {
+      try {
+        chrome.runtime.sendMessage({ type: 'KAIROS_CAPTURE_TAB' }, (dataUrl) => {
+          host.style.display = '';
+          isCapturing = false;
+
+          if (chrome.runtime.lastError || !dataUrl) {
+            console.warn('[Kairos] captureTab failed:', chrome.runtime.lastError?.message || 'no data');
+            cancelCapture();
+            return;
+          }
+
+          // Crop the region from the full-page screenshot
+          cropImage(dataUrl, x, y, w, h, window.devicePixelRatio || 1)
+            .then((croppedB64) => {
+              capturedImageB64 = croppedB64;
+              selectedText = '';
+              openPopupWithImage(croppedB64);
+            })
+            .catch(() => {
+              host.style.display = '';
+              cancelCapture();
+            });
+        });
+      } catch (err) {
+        // Extension context invalidated (e.g. after update/reload)
+        console.warn('[Kairos] sendMessage failed:', err);
         host.style.display = '';
         isCapturing = false;
-
-        if (!dataUrl) {
-          cancelCapture();
-          return;
-        }
-
-        // Crop the region from the full-page screenshot
-        cropImage(dataUrl, x, y, w, h, window.devicePixelRatio || 1)
-          .then((croppedB64) => {
-            capturedImageB64 = croppedB64;
-            selectedText = '';
-            openPopupWithImage(croppedB64);
-          })
-          .catch(() => cancelCapture());
-      });
-    }, 80); // Small delay so the overlay is gone before capture
+        cancelCapture();
+      }
+    }, 120); // Delay so the overlay is gone before capture
   });
 
   function cropImage(dataUrl, x, y, w, h, dpr) {

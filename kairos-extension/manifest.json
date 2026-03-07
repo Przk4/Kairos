@@ -11,10 +11,12 @@
   "permissions": [
     "activeTab",
     "storage",
-    "cookies"
+    "cookies",
+    "tabs"
   ],
   "host_permissions": [
-    "https://kairos.bar/*"
+    "https://kairos.bar/*",
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"

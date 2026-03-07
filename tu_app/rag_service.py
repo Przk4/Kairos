@@ -1146,58 +1146,54 @@ class RAGService:
                             try:
                                 from .ocr_service import get_ocr_service
                                 ocr = get_ocr_service()
-                                if ocr.openai_client:  # Only if vision is available
-                                    # Re-download file bytes for image extraction
-                                    file_lower_ocr = item.url.lower()
-                                    content_type_ocr = ''  # Already downloaded, use extension
+                                file_lower_ocr = item.url.lower()
 
-                                    ocr_images = []
-                                    # Get raw bytes from last download (cache in instance)
-                                    raw_bytes = getattr(self, '_last_file_bytes', None)
-                                    if raw_bytes:
-                                        if file_lower_ocr.endswith(('.pptx', '.ppt')):
-                                            ocr_images = ocr.extract_images_from_pptx(raw_bytes)
-                                        elif file_lower_ocr.endswith('.pdf'):
-                                            ocr_images = ocr.extract_images_from_pdf(raw_bytes)
+                                ocr_images = []
+                                raw_bytes = getattr(self, '_last_file_bytes', None)
+                                if raw_bytes:
+                                    if file_lower_ocr.endswith(('.pptx', '.ppt')):
+                                        ocr_images = ocr.extract_images_from_pptx(raw_bytes)
+                                    elif file_lower_ocr.endswith('.pdf'):
+                                        ocr_images = ocr.extract_images_from_pdf(raw_bytes)
 
-                                    for img_idx, img_data in enumerate(ocr_images):
-                                        img_text = img_data.get('text', '')
-                                        if not img_text or len(img_text.strip()) < 20:
-                                            continue
-                                        location = img_data.get('slide', img_data.get('page', '?'))
-                                        img_doc = f"{item.title} - Imagen (slide/página {location})\n\n{img_text}"
-                                        img_emb = self.embedding_model.encode(img_doc).tolist()
-                                        img_importance = 0.7
-                                        embeddings_count += 1
+                                for img_idx, img_data in enumerate(ocr_images):
+                                    img_text = img_data.get('text', '')
+                                    if not img_text or len(img_text.strip()) < 20:
+                                        continue
+                                    location = img_data.get('slide', img_data.get('page', '?'))
+                                    img_doc = f"{item.title} - Imagen (slide/página {location})\n\n{img_text}"
+                                    img_emb = self.embedding_model.encode(img_doc).tolist()
+                                    img_importance = 0.7
+                                    embeddings_count += 1
 
-                                        img_doc_id = f"item_{item.id}_img_{img_idx}"
-                                        img_meta = {
-                                            'item_id': str(item.id),
-                                            'item_title': item.title,
-                                            'item_type': item.get_item_type_display(),
-                                            'module_id': str(module.id),
-                                            'content_type': 'image_ocr',
-                                            'image_location': str(location),
-                                            'has_content': 'yes',
-                                            'importance_score': str(img_importance),
-                                        }
+                                    img_doc_id = f"item_{item.id}_img_{img_idx}"
+                                    img_meta = {
+                                        'item_id': str(item.id),
+                                        'item_title': item.title,
+                                        'item_type': item.get_item_type_display(),
+                                        'module_id': str(module.id),
+                                        'content_type': 'image_ocr',
+                                        'image_location': str(location),
+                                        'has_content': 'yes',
+                                        'importance_score': str(img_importance),
+                                    }
 
-                                        if self.using_chromadb and self.client:
-                                            collection.add(
-                                                ids=[img_doc_id],
-                                                embeddings=[img_emb],
-                                                documents=[img_doc],
-                                                metadatas=[img_meta]
-                                            )
-                                        else:
-                                            collection['documents'].append(img_doc)
-                                            collection['embeddings'].append(img_emb)
-                                            collection['metadatas'].append(img_meta)
-                                            collection['importance_scores'].append(img_importance)
+                                    if self.using_chromadb and self.client:
+                                        collection.add(
+                                            ids=[img_doc_id],
+                                            embeddings=[img_emb],
+                                            documents=[img_doc],
+                                            metadatas=[img_meta]
+                                        )
+                                    else:
+                                        collection['documents'].append(img_doc)
+                                        collection['embeddings'].append(img_emb)
+                                        collection['metadatas'].append(img_meta)
+                                        collection['importance_scores'].append(img_importance)
 
-                                        logger.debug(f"    [IMG OCR] #{img_idx}: location {location}, {len(img_text)} chars")
-                                    if ocr_images:
-                                        logger.info(f"  [IMG OCR] Created {len(ocr_images)} image embeddings")
+                                    logger.debug(f"    [IMG OCR] #{img_idx}: location {location}, {len(img_text)} chars")
+                                if ocr_images:
+                                    logger.info(f"  [IMG OCR] Created {len(ocr_images)} image embeddings")
                             except Exception as e:
                                 logger.warning(f"  [IMG OCR] Image extraction skipped: {e}")
                     else:
