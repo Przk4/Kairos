@@ -212,8 +212,11 @@ class OCRService:
             if latex:
                 return latex
             # If LaTeX mode also failed, return whatever we got
-            return text or ""
+            return _texify_tags_to_latex(text) if text else ""
 
+        # RecognitionPredictor may output <math> tags for formulas
+        # even in normal mode — convert them to LaTeX delimiters.
+        text = _texify_tags_to_latex(text)
         logger.info(f"[OCR] Extracted {len(text)} chars")
         return text
 
