@@ -552,7 +552,10 @@ def chat_api(request):
                 question = f"{question}\n\n[Contenido de la imagen adjunta]:\n{image_ocr_text}"
             else:
                 question = f"Analiza la siguiente imagen:\n\n{image_ocr_text}"
-        
+        elif image_bytes and not question:
+            # Image was sent but OCR returned nothing (model not loaded, etc.)
+            question = "Analiza la imagen adjunta. (No se pudo extraer texto de la imagen.)"
+
         if not question:
             return JsonResponse({'error': 'Pregunta vacía'}, status=400)
         
@@ -1869,6 +1872,8 @@ def extension_ask(request):
                 text = f"{text}\n\n[Contenido de la imagen]:\n{image_ocr_text}"
             else:
                 text = f"Analiza la siguiente imagen:\n\n{image_ocr_text}"
+        elif b64_image and not text:
+            text = "Analiza la imagen adjunta. (No se pudo extraer texto de la imagen.)"
 
         if not text:
             return JsonResponse({'error': 'Texto vacío'}, status=400)
