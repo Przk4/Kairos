@@ -537,14 +537,16 @@ def chat_api(request):
                 image_bytes = _b64.b64decode(b64_image)
 
         # OCR the image if present
+        ocr_error = None
         if image_bytes:
             try:
                 from .ocr_service import get_ocr_service
                 ocr = get_ocr_service()
-                image_ocr_text = ocr.extract_text(image_bytes, detail="high")
+                image_ocr_text = ocr.extract_text(image_bytes)
                 logger.info(f"[CHAT] Image OCR: {len(image_ocr_text)} chars extracted")
             except Exception as e:
-                logger.warning(f"[CHAT] Image OCR failed: {e}")
+                ocr_error = str(e)
+                logger.error(f"[CHAT] Image OCR failed: {e}", exc_info=True)
 
         # Combine question with OCR text
         if image_ocr_text:
@@ -553,8 +555,10 @@ def chat_api(request):
             else:
                 question = f"Analiza la siguiente imagen:\n\n{image_ocr_text}"
         elif image_bytes and not question:
-            # Image was sent but OCR returned nothing (model not loaded, etc.)
-            question = "Analiza la imagen adjunta. (No se pudo extraer texto de la imagen.)"
+            # Image was sent but OCR returned nothing
+            detail = f" Error OCR: {ocr_error}" if ocr_error else ""
+            question = f"El usuario envió una imagen pero no se pudo extraer texto.{detail}"
+            logger.error(f"[CHAT] Image sent but OCR empty.{detail}")
 
         if not question:
             return JsonResponse({'error': 'Pregunta vacía'}, status=400)
@@ -1857,14 +1861,16 @@ def extension_ask(request):
 
         # OCR screenshot/image if provided
         image_ocr_text = None
+        ocr_error = None
         if b64_image:
             try:
                 from .ocr_service import get_ocr_service
                 ocr = get_ocr_service()
-                image_ocr_text = ocr.extract_text_from_base64(b64_image, detail="high")
+                image_ocr_text = ocr.extract_text_from_base64(b64_image)
                 logger.info(f"[EXT] Image OCR: {len(image_ocr_text)} chars")
             except Exception as e:
-                logger.warning(f"[EXT] Image OCR failed: {e}")
+                ocr_error = str(e)
+                logger.error(f"[EXT] Image OCR failed: {e}", exc_info=True)
 
         # Combine text + image OCR
         if image_ocr_text:
@@ -1873,7 +1879,8 @@ def extension_ask(request):
             else:
                 text = f"Analiza la siguiente imagen:\n\n{image_ocr_text}"
         elif b64_image and not text:
-            text = "Analiza la imagen adjunta. (No se pudo extraer texto de la imagen.)"
+            detail = f" Error OCR: {ocr_error}" if ocr_error else ""
+            text = f"El usuario envió una imagen pero no se pudo extraer texto.{detail}"
 
         if not text:
             return JsonResponse({'error': 'Texto vacío'}, status=400)
