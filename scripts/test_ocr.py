@@ -39,16 +39,22 @@ def main():
         return
 
     try:
-        from surya.layout import LayoutPredictor
-        print("    ✓ LayoutPredictor importable")
-    except ImportError as e:
-        print(f"    ✗ LayoutPredictor import FAILED: {e}")
-
-    try:
         from surya.recognition import RecognitionPredictor
         print("    ✓ RecognitionPredictor importable")
     except ImportError as e:
         print(f"    ✗ RecognitionPredictor import FAILED: {e}")
+
+    try:
+        from surya.detection import DetectionPredictor
+        print("    ✓ DetectionPredictor importable")
+    except ImportError as e:
+        print(f"    ✗ DetectionPredictor import FAILED: {e}")
+
+    try:
+        from surya.foundation import FoundationPredictor
+        print("    ✓ FoundationPredictor importable")
+    except ImportError as e:
+        print(f"    ✗ FoundationPredictor import FAILED: {e}")
 
     try:
         from surya.common.surya.schema import TaskNames
