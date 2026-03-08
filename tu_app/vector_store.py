@@ -31,7 +31,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 try:
     import chromadb
-    from chromadb.config import Settings  # noqa: F401
     _CHROMADB_AVAILABLE = True
 except Exception as _e:
     logger.warning(f"ChromaDB not available, using in-memory fallback: {_e}")

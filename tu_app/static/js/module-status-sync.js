@@ -158,7 +158,7 @@ async function syncModuleStatus(moduleId, element, type = 'button') {
                 statusSpan = document.createElement('div');
                 statusSpan.className = 'status-text';
                 statusSpan.style.fontSize = '0.85em';
-                statusSpan.style.margintop = '5px';
+                statusSpan.style.marginTop = '5px';
                 element.appendChild(statusSpan);
             }
             statusSpan.textContent = status.text;

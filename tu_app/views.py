@@ -14,6 +14,7 @@ import logging
 import secrets
 import json
 import time
+import re
 from urllib.parse import urlencode, urlparse
 from .models import CanvasToken, Course, Module, ModuleAnalysis, ModuleEmbedding, ChatMessage, StudentProfile, LoginRecord
 from .canvas_auth import (
@@ -24,7 +25,6 @@ from .canvas_auth import (
     sync_courses_for_user,
     sync_modules_for_course
 )
-from .debug_service import get_debug_service
 from .rag_service import get_rag_service
 from .ai_service import get_ai_service
 from .query_analyzer import get_query_analyzer
@@ -62,34 +62,42 @@ def _get_canvas_redirect_uri(request):
 
     return configured_uri
 
-# Almacenamiento temporal del último flujo de prompt para debug
-# NOTA: Solo para desarrollo. En producción con múltiples workers,
-# usar Django cache framework (Redis/Memcached) en su lugar.
-_last_prompt_flow = {
-    'question': None,
-    'question_length': 0,
-    'retrieved_count': 0,
-    'retrieved_docs': [],
-    'context': None,
-    'system_prompt': None,
-    'full_user_prompt': None,
-    'response': None,
-    'timestamp': None
-}
+
+# ---------------------------------------------------------------------------
+# Content-cleaning patterns (reused by chat_api and extension_ask)
+# ---------------------------------------------------------------------------
+_SLIDE_RE = re.compile(r'\n*---\s*(?:Slide|Página)\s*\d+\s*---\n*')
+_NOISE_LINE_RE = [
+    re.compile(r'^\d{1,3}$'),
+    re.compile(r'^20[\dXx]{2}$'),
+    re.compile(r'pie de p[aá]gina|footer|placeholder|click to edit|haga clic', re.IGNORECASE),
+    re.compile(r'^(?:©|\(c\)|copyright)\s*20', re.IGNORECASE),
+]
 
 
-def test_api(request):
-    """
-    Endpoint de prueba para diagnosticar problemas AJAX.
-    """
-    if request.method == 'POST':
-        return JsonResponse({
-            'status': 'ok',
-            'message': 'API respondiendo correctamente JSON',
-            'authenticated': request.user.is_authenticated,
-            'username': request.user.username if request.user.is_authenticated else 'Anónimo'
-        })
-    return JsonResponse({'error': 'Use POST'}, status=400)
+def _clean_chunk_content(raw: str) -> str:
+    """Remove slide markers and PPTX noise from a raw context chunk."""
+    text = _SLIDE_RE.sub('\n', raw)
+    lines = []
+    for line in text.split('\n'):
+        line = line.strip()
+        if not line or len(line) < 3:
+            continue
+        if any(p.search(line) for p in _NOISE_LINE_RE):
+            continue
+        lines.append(line)
+    return '\n'.join(lines).strip()
+
+
+def _clean_ai_answer(answer: str) -> str:
+    """Normalise AI answer: dedent, strip trailing spaces, collapse blank lines."""
+    if not answer:
+        return answer
+    from textwrap import dedent
+    cleaned = dedent(answer).strip()
+    cleaned = '\n'.join(ln.rstrip() for ln in cleaned.splitlines())
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    return cleaned
 
 
 def index(request):
@@ -644,29 +652,8 @@ def chat_api(request):
                             similarity = item.get('relevance_score', item.get('similarity', 0))
                             item_title = item.get('metadata', {}).get('item_title', 'Unknown')
                             raw_content = item.get('content', '')
+                            clean_content = _clean_chunk_content(raw_content)
                             
-                            # Limpiar contenido: remover marcadores de slide y ruido residual
-                            import re as _re
-                            clean_content = _re.sub(r'\n*---\s*Slide\s*\d+\s*---\n*', '\n', raw_content)
-                            clean_content = _re.sub(r'\n*---\s*Página\s*\d+\s*---\n*', '\n', clean_content)
-                            # Limpiar cada línea de ruido PPTX
-                            clean_lines = []
-                            for _line in clean_content.split('\n'):
-                                _line = _line.strip()
-                                if not _line or len(_line) < 3:
-                                    continue
-                                if _re.match(r'^\d{1,3}$', _line):
-                                    continue
-                                if _re.match(r'^20[\dXx]{2}$', _line):
-                                    continue
-                                if _re.search(r'pie de p[aá]gina|ejemplo de texto|footer|placeholder|click to edit|haga clic', _line, _re.IGNORECASE):
-                                    continue
-                                if _re.match(r'^(?:©|\(c\)|copyright)\s*20', _line, _re.IGNORECASE):
-                                    continue
-                                clean_lines.append(_line)
-                            clean_content = '\n'.join(clean_lines).strip()
-                            
-                            # Descartar chunks que quedaron vacíos después de limpiar
                             if not clean_content or len(clean_content) < 15:
                                 context_count -= 1
                                 continue
@@ -680,30 +667,6 @@ def chat_api(request):
                             context_text += f"\n[Docs {i+1}] {item_title}\n{clean_content}"
                     else:
                         context_text = str(context)
-            
-            # GUARDAR FLUJO PARA DEBUG
-            global _last_prompt_flow
-            
-            # Obtener system prompt para mostrarlo en dashboard
-            from tu_app.ai_service_config import DeepSeekProvider
-            system_prompt = DeepSeekProvider.SYSTEM_PROMPT
-            
-            # Construir el prompt completo tal cual se envía a DeepSeek
-            full_user_prompt = f"""Contexto del curso:\n{context_text}\n\nPregunta del estudiante:\n{question}\n\nPor favor, responde basándote en el contexto proporcionado."""
-            
-            _last_prompt_flow = {
-                'question': question,
-                'question_length': len(question),
-                'query_analysis': query_analysis,  # NUEVO: Análisis inteligente de pregunta
-                'requested_chunks': optimal_fragments,  # NUEVO: Cuántos se solicitaron
-                'retrieved_count': context_count,  # Cuántos se recibieron
-                'retrieved_docs': embeddings_info,
-                'context': context_text,  # SIN TRUNCAR - completo
-                'system_prompt': system_prompt,
-                'full_user_prompt': full_user_prompt,
-                'response': None,  # Se actualiza después
-                'timestamp': timezone.now().isoformat()
-            }
             
             # Obtenemos respuesta de DeepSeek
             ai_service = get_ai_service()
@@ -719,28 +682,7 @@ def chat_api(request):
             tokens = ai_response.get('tokens_used', 0)
             answer = ai_response.get('answer', '')
 
-            # Clean and normalize AI answer formatting:
-            # - Remove common indentation (dedent)
-            # - Trim leading/trailing whitespace
-            # - Strip trailing spaces on each line
-            # - Collapse excessive blank lines (3+ -> 2)
-            try:
-                import re
-                from textwrap import dedent
-
-                if answer and isinstance(answer, str):
-                    cleaned = dedent(answer)
-                    cleaned = cleaned.strip()
-                    # Remove trailing spaces per line
-                    cleaned = '\n'.join([ln.rstrip() for ln in cleaned.splitlines()])
-                    # Collapse multiple blank lines to at most two
-                    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-                    answer = cleaned
-            except Exception as _e:
-                logger.warning(f"Answer cleaning failed: {_e}")
-            
-            # ACTUALIZAR RESPUESTA EN FLUJO DEBUG
-            _last_prompt_flow['response'] = answer
+            answer = _clean_ai_answer(answer)
             
             # Guardamos la respuesta de IA
             ai_message = ChatMessage.objects.create(
@@ -1212,433 +1154,8 @@ def api_teacher_assignment_groups(request, course_id):
 
 
 # ============================================================================
-# ENDPOINTS DE DEBUGGING - Para ver qué está pasando adentro del sistema
+# MODULE STATUS ENDPOINTS
 # ============================================================================
-
-@login_required
-@require_http_methods(["GET"])
-def debug_events(request):
-    """
-    Endpoint para obtener los eventos recientes del sistema.
-    Útil para debugging en desarrollo.
-    
-    Parámetros:
-    - type: Filtrar por tipo de evento (RAG, DEEPSEEK, EMBEDDING, ERROR)
-    - limit: Número de eventos a retornar (default: 50)
-    """
-    try:
-        event_type = request.GET.get('type', None)
-        limit = int(request.GET.get('limit', 50))
-        
-        debug_service = get_debug_service()
-        events = debug_service.get_recent_events(event_type=event_type, limit=limit)
-        
-        return JsonResponse({
-            'status': 'ok',
-            'events': events,
-            'total_events': len(debug_service.events),
-            'event_type_filter': event_type,
-        })
-    except Exception as e:
-        logger.error(f"Error in debug_events: {e}")
-        return JsonResponse({'error': str(e)}, status=500)
-
-
-@login_required
-@require_http_methods(["GET"])
-def debug_stats(request):
-    """
-    Endpoint para obtener estadísticas del sistema.
-    Incluye stats de RAG (AHORA desde BD, no en-memoria), DeepSeek, memoria, etc.
-    """
-    try:
-        debug_service = get_debug_service()
-        stats = debug_service.get_stats()
-        
-        # Obtener embeddings REALES de la BD (query eficiente, sin N+1)
-        from django.db.models import Count, Q
-        embedding_stats = ModuleEmbedding.objects.aggregate(
-            total_modules=Count('id'),
-        )
-        
-        # Contar documentos: necesitamos iterar pero con una sola query
-        total_embeddings = 0
-        analyzed_modules = 0
-        for emb in ModuleEmbedding.objects.only('embedding_data').iterator():
-            docs = emb.embedding_data.get('documents', []) if emb.embedding_data else []
-            doc_count = len(docs)
-            if doc_count > 0:
-                total_embeddings += doc_count
-                analyzed_modules += 1
-        
-        # Actualizar stats de RAG con datos REALES de BD
-        stats['rag']['total_embeddings'] = total_embeddings
-        stats['rag']['modules_analyzed'] = analyzed_modules
-        
-        return JsonResponse({
-            'status': 'ok',
-            'timestamp': stats['timestamp'],
-            'rag': stats['rag'],
-            'deepseek': stats['deepseek'],
-            'memory_db': stats['memory_db'],
-            'event_counts': stats['event_types'],
-        })
-    except Exception as e:
-        logger.error(f"Error in debug_stats: {e}")
-        return JsonResponse({'error': str(e)}, status=500)
-
-
-@login_required
-@require_http_methods(["GET"])
-def debug_documents(request):
-    """
-    Endpoint para obtener los documentos que fueron analizados.
-    
-    Parámetros:
-    - module_id: Filtrar por ID de módulo (opcional)
-    """
-    try:
-        module_id = request.GET.get('module_id', None)
-        debug_service = get_debug_service()
-        
-        if module_id:
-            documents = debug_service.get_analyzed_documents(int(module_id))
-        else:
-            documents = debug_service.get_analyzed_documents()
-        
-        return JsonResponse({
-            'status': 'ok',
-            'documents': documents,
-        })
-    except Exception as e:
-        logger.error(f"Error in debug_documents: {e}")
-        return JsonResponse({'error': str(e)}, status=500)
-
-
-@login_required
-@require_http_methods(["GET"])
-def debug_rag_status(request):
-    """
-    Endpoint para ver el estado actual del sistema RAG.
-    Muestra: ChromaDB status, embedding counts, backend being used, etc.
-    """
-    try:
-        rag_service = get_rag_service()
-        
-        # Información del backend
-        info = {
-            'backend': 'chromadb' if rag_service.using_chromadb else 'in_memory',
-            'chromadb_available': bool(rag_service.client),
-            'persistent_dir': rag_service.persistent_dir if rag_service.using_chromadb else None,
-            'embedding_model': 'paraphrase-multilingual-MiniLM-L12-v2',
-        }
-        
-        # Si es ChromaDB, contar colecciones
-        if rag_service.using_chromadb and rag_service.client:
-            try:
-                collections = rag_service.client.list_collections()
-                collections_info = []
-                for col in collections:
-                    count = col.count()
-                    collections_info.append({
-                        'name': col.name,
-                        'embeddings_count': count
-                    })
-                info['collections'] = collections_info
-                info['total_collections'] = len(collections)
-                info['total_embeddings'] = sum(c['embeddings_count'] for c in collections_info)
-            except Exception as e:
-                logger.error(f"Error listing ChromaDB collections: {e}")
-                info['collections'] = []
-                info['error'] = str(e)
-        else:
-            # Mostrar información de memoria
-            info['in_memory_collections'] = list(rag_service.in_memory_db.keys())
-            info['total_embeddings'] = sum(
-                len(rag_service.in_memory_db[k].get('embeddings', []))
-                for k in rag_service.in_memory_db
-            )
-        
-        # Agregar versión del código para diagnóstico
-        info['code_version'] = '2026-03-08-v3-clean-chunking'
-        info['similarity_formula'] = '1 - (distance / 2)'
-        
-        return JsonResponse({
-            'status': 'ok',
-            'rag_status': info
-        })
-    except Exception as e:
-        logger.error(f"Error in debug_rag_status: {e}")
-        return JsonResponse({'error': str(e)}, status=500)
-
-
-@login_required
-@require_http_methods(["GET"])
-def debug_search_test(request):
-    """
-    Endpoint de diagnóstico para probar búsqueda RAG con detalles crudos.
-    Muestra distancias originales de ChromaDB y cómo se calculan las similitudes.
-    
-    Uso: /api/debug/search-test/?q=resumen&module_id=1&course_id=1
-    """
-    try:
-        query = request.GET.get('q', 'Dame un resumen')
-        module_id = int(request.GET.get('module_id', 1))
-        course_id = int(request.GET.get('course_id', 1))
-        top_k = int(request.GET.get('top_k', 5))
-        
-        rag_service = get_rag_service()
-        collection_name = f"module_{module_id}_course_{course_id}"
-        
-        result = {
-            'query': query,
-            'module_id': module_id,
-            'course_id': course_id,
-            'top_k': top_k,
-            'collection_name': collection_name,
-            'code_version': '2026-03-08-v3-clean-chunking',
-        }
-        
-        if rag_service.using_chromadb and rag_service.client:
-            try:
-                collection = rag_service.client.get_collection(collection_name)
-                total_docs = collection.count()
-                result['total_docs_in_collection'] = total_docs
-                
-                raw_results = collection.query(
-                    query_texts=[query],
-                    n_results=min(top_k, total_docs),
-                    include=["documents", "metadatas", "distances"]
-                )
-                
-                result['raw_distances'] = raw_results.get('distances', [[]])[0]
-                
-                # Mostrar cómo se calcula cada similitud
-                items = []
-                if raw_results['documents'] and raw_results['documents'][0]:
-                    for i, (doc, meta, dist) in enumerate(zip(
-                        raw_results['documents'][0],
-                        raw_results['metadatas'][0],
-                        raw_results['distances'][0]
-                    )):
-                        # Fórmula correcta
-                        similarity_correct = max(0, 1 - (dist / 2))
-                        # Fórmula incorrecta (vieja)
-                        similarity_wrong = 1 - dist
-                        
-                        items.append({
-                            'rank': i + 1,
-                            'title': meta.get('item_title', 'Unknown'),
-                            'distance': round(dist, 4),
-                            'similarity_correct': round(similarity_correct, 4),
-                            'similarity_wrong': round(similarity_wrong, 4),
-                            'preview': doc[:100] + '...'
-                        })
-                
-                result['items'] = items
-                result['diagnosis'] = 'Si ves similarity_wrong en el dashboard, el servidor no está actualizado'
-                
-            except Exception as e:
-                result['error'] = str(e)
-        else:
-            result['error'] = 'ChromaDB not available'
-        
-        return JsonResponse(result)
-        
-    except Exception as e:
-        logger.error(f"Error in debug_search_test: {e}")
-        return JsonResponse({'error': str(e)}, status=500)
-
-
-@login_required
-@require_http_methods(["GET"])
-def debug_prompt_flow(request):
-    """
-    Endpoint para obtener el último flujo de prompt.
-    Muestra: pregunta, embeddings recuperados, contexto y respuesta.
-    
-    UTILIZADO POR: /debug/dashboard/ - Actualiza en tiempo real cada 2 segundos
-    
-    Retorna:
-    {
-        'last_question': str,
-        'question_length': int,
-        'retrieved_count': int,
-        'retrieved_docs': [
-            {
-                'rank': int,                    # Posición en ranking
-                'title': str,                   # Título del documento
-                'similarity': float (0.0-1.0),  # Puntuación de similitud
-                'preview': str                  # Primeros 150 caracteres
-            },
-            ...
-        ],
-        'rag_context': str,                    # Contexto formateado para DeepSeek
-        'deepseek_response': str,              # Respuesta del modelo
-        'timestamp': str                       # ISO format timestamp
-    }
-    """
-    global _last_prompt_flow
-    
-    # Incluir info del query_analysis si está disponible
-    query_analysis = _last_prompt_flow.get('query_analysis', {})
-    
-    return JsonResponse({
-        'status': 'ok',
-        'last_question': _last_prompt_flow.get('question') or 'Sin pregunta registrada',
-        'question_length': _last_prompt_flow.get('question_length', 0),
-        'query_type': query_analysis.get('query_type', 'unknown'),
-        'requested_chunks': _last_prompt_flow.get('requested_chunks', 5),  # Cuántos se solicitaron
-        'retrieved_count': _last_prompt_flow.get('retrieved_count', 0),   # Cuántos llegaron
-        'retrieved_docs': _last_prompt_flow.get('retrieved_docs', []),
-        'rag_context': _last_prompt_flow.get('context') or 'Sin contexto',
-        'system_prompt': _last_prompt_flow.get('system_prompt') or 'No disponible',
-        'full_user_prompt': _last_prompt_flow.get('full_user_prompt') or 'No disponible',
-        'deepseek_response': _last_prompt_flow.get('response') or 'Sin respuesta registrada',
-        'timestamp': _last_prompt_flow.get('timestamp') or '?'
-    })
-
-
-@login_required
-@require_http_methods(["POST"])
-def debug_question_embeddings(request):
-    """
-    Endpoint para ver los embeddings de una pregunta y compararlos con documentos analizados.
-    
-    POST body:
-    {
-        "question": "¿Qué es...",
-        "module_id": 1,
-        "course_id": 1
-    }
-    
-    Retorna:
-    - Embedding de la pregunta (primeras 5 dimensiones)
-    - Puntuaciones de similitud con cada chunk
-    - Chunks más relevantes
-    """
-    try:
-        data = json.loads(request.body)
-        question = data.get('question', '').strip()
-        module_id = data.get('module_id')
-        course_id = data.get('course_id')
-        
-        if not question:
-            return JsonResponse({'error': 'Pregunta vacía'}, status=400)
-        
-        # Obtener RAG service para acceder al embedding model
-        rag_service = get_rag_service()
-        
-        # Paso 1: Crear embedding de la pregunta con Piragi
-        question_embedding = rag_service.embedding_model.encode(question).tolist()
-        
-        # Paso 2: Obtener embeddings de los documentos analizados
-        collection_name = f"module_{module_id}_course_{course_id}"
-        
-        if collection_name not in rag_service.in_memory_db:
-            return JsonResponse({
-                'error': f'No hay documentos analizados para este módulo',
-                'collection': collection_name
-            }, status=404)
-        
-        collection = rag_service.in_memory_db[collection_name]
-        
-        if not collection['documents']:
-            return JsonResponse({
-                'error': 'Colección vacía',
-                'collection': collection_name
-            }, status=404)
-        
-        # Paso 3: Calcular similitud coseno entre pregunta y cada chunk
-        try:
-            from sklearn.metrics.pairwise import cosine_similarity
-            similarities = [
-                float(cosine_similarity([question_embedding], [emb])[0][0])
-                for emb in collection['embeddings']
-            ]
-        except ImportError:
-            import numpy as np
-            query_norm = np.linalg.norm(question_embedding)
-            similarities = []
-            for emb in collection['embeddings']:
-                emb_norm = np.linalg.norm(emb)
-                similarity = float(np.dot(question_embedding, emb) / (query_norm * emb_norm + 1e-8))
-                similarities.append(similarity)
-        
-        # Ordenar por similitud
-        ranked_chunks = []
-        for idx, (doc, metadata, similarity) in enumerate(zip(
-            collection['documents'],
-            collection['metadatas'],
-            similarities
-        )):
-            ranked_chunks.append({
-                'rank': idx + 1,
-                'similarity': similarity,
-                'title': metadata.get('item_title', 'Unknown'),
-                'chunk_index': metadata.get('chunk_index', '0'),
-                'chunk_total': metadata.get('chunk_total', '1'),
-                'preview': doc[:200],
-                'full_content': doc,
-            })
-        
-        # Ordenar por similitud (descendente)
-        ranked_chunks.sort(key=lambda x: x['similarity'], reverse=True)
-        
-        # Sacar top 5
-        top_chunks = ranked_chunks[:5]
-        
-        return JsonResponse({
-            'status': 'ok',
-            'question': question,
-            'question_embedding_dims': len(question_embedding),
-            'question_embedding_sample': question_embedding[:5],  # Primeras 5 dimensiones como muestra
-            'total_chunks_analyzed': len(collection['documents']),
-            'similarities': {
-                'min': round(min(similarities), 3),
-                'max': round(max(similarities), 3),
-                'mean': round(sum(similarities) / len(similarities), 3),
-            },
-            'top_matches': top_chunks,
-            'all_chunks': ranked_chunks  # Todos ordenados por similitud
-        })
-        
-    except json.JSONDecodeError:
-        return JsonResponse({'error': 'JSON inválido'}, status=400)
-    except Exception as e:
-        logger.error(f"Error en debug_question_embeddings: {e}", exc_info=True)
-        return JsonResponse({'error': str(e)}, status=500)
-
-
-@require_http_methods(["GET", "POST"])
-def test_button_click(request):
-    """
-    Endpoint para testear que los clics del botón funcionan correctamente.
-    Útil para debugging sin necesidad de análisis real.
-    
-    GET: Retorna info de test
-    POST: Simula un análisis (sin hacer nada, solo retorna OK)
-    """
-    if request.method == 'GET':
-        return JsonResponse({
-            'status': 'ok',
-            'message': 'Test button endpoint is working',
-            'usage': 'POST para simular clic del botón',
-            'response_time_ms': 10
-        })
-    
-    # POST - Simular análisis
-    logger.info(f"Test button click from {request.META.get('REMOTE_ADDR', 'unknown')}")
-    import time
-    time.sleep(1)  # Simular pequeña demora
-    
-    return JsonResponse({
-        'status': 'completed',
-        'message': 'Test análisis completado (simulado)',
-        'items_processed': 5,
-        'test': True
-    })
-
 
 @login_required
 @require_http_methods(["GET"])
@@ -1773,76 +1290,6 @@ def get_all_modules_stats(request):
         return JsonResponse({'error': str(e)}, status=500)
 
 
-@login_required
-def debug_test_data(request):
-    """
-    Endpoint para generar datos de prueba en el debug dashboard.
-    Útil para ver cómo se ve el dashboard con datos reales.
-    """
-    global _last_prompt_flow
-    
-    # Generar datos de prueba
-    mock_data = {
-        'question': '¿Cuál es el propósito principal del aprendizaje automático en sistemas educativos?',
-        'retrieved_count': 3,
-        'retrieved_docs': [
-            {
-                'rank': 1,
-                'title': 'Introduction to Machine Learning',
-                'similarity': 0.945,
-                'preview': 'El aprendizaje automático es una rama de la inteligencia artificial que permite que las máquinas aprendan de los datos sin ser programadas explícitamente...'
-            },
-            {
-                'rank': 2,
-                'title': 'ML Applications in Education',
-                'similarity': 0.872,
-                'preview': 'Las aplicaciones del aprendizaje automático en educación transforman la forma en que los estudiantes aprenden. Desde sistemas de recomendación personalizados...'
-            },
-            {
-                'rank': 3,
-                'title': 'Neural Networks Basics',
-                'similarity': 0.756,
-                'preview': 'Las redes neuronales son modelos computacionales inspirados en el cerebro humano. Consisten en capas de neuronas artificiales conectadas...'
-            }
-        ],
-        'context': '''[Docs 1] Introduction to Machine Learning
-El aprendizaje automático es una rama de la inteligencia artificial que permite que las máquinas aprendan de los datos sin ser programadas explícitamente. Mediante algoritmos y técnicas estadísticas, los sistemas de ML pueden identificar patrones, hacer predicciones y mejorar continuamente.
-
-[Docs 2] ML Applications in Education
-Las aplicaciones del aprendizaje automático en educación transforman la forma en que los estudiantes aprenden. Desde sistemas de recomendación personalizados hasta análisis predictivo del rendimiento estudiantil, el ML permite una educación más adaptativa y personalizada.
-
-[Docs 3] Neural Networks Basics
-Las redes neuronales son modelos computacionales inspirados en el cerebro humano. Consisten en capas de neuronas artificiales conectadas mediante pesos sinápticos, permitiendo el aprendizaje profundo y procesamiento complejo de datos.''',
-        'response': 'El aprendizaje automático juega un papel crucial en los sistemas educativos modernos. Como se puede ver en los documentos recuperados, el ML permite personalizar la experiencia de aprendizaje para cada estudiante, predecir problemas académicos y adaptar dinámicamente el contenido.\n\nLos principales propósitos incluyen:\n\n1. **Personalización**: Los sistemas de ML pueden adaptar el contenido y la velocidad de aprendizaje a las necesidades individuales de cada estudiante.\n\n2. **Predicción de Rendimiento**: Mediante el análisis de patrones históricos, se pueden identificar estudiantes que podrían necesitar apoyo adicional.\n\n3. **Optimización de Recursos**: El ML ayuda a instituciones a asignar recursos educativos de manera más eficiente.\n\n4. **Retroalimentación Inmediata**: Los sistemas pueden proporcionar feedback instantáneo sobre el desempeño del estudiante.\n\nEsta integración de tecnología ML en educación representa un cambio fundamental hacia sistemas más inteligentes, adaptativos y centrados en el estudiante.',
-        'timestamp': timezone.now().isoformat()
-    }
-    
-    _last_prompt_flow = mock_data
-    
-    return JsonResponse({
-        'status': 'ok',
-        'message': 'Datos de prueba generados exitosamente en _last_prompt_flow',
-        'docs_count': len(mock_data['retrieved_docs']),
-        'timestamp': mock_data['timestamp']
-    })
-
-
-@login_required
-def debug_dashboard(request):
-    """
-    Dashboard visual para ver qué está pasando en el sistema.
-    Muestra eventos en tiempo real, estadísticas, etc.
-    """
-    return render(request, 'tu_app/debug_dashboard.html')
-
-
-def test_button_page(request):
-    """
-    Página de test para debugging del botón de análisis.
-    """
-    return render(request, 'tu_app/test_button.html')
-
-
 # ============================================================================
 # EXTENSIÓN DE CHROME — Endpoints para la extensión de Kairos
 # ============================================================================
@@ -1925,19 +1372,11 @@ def extension_ask(request):
             context.extend(mod_context)
 
         # Construir contexto limpio
-        import re as _re
         context_text = ""
         for i, item in enumerate(context):
             if isinstance(item, dict):
                 raw = item.get('content', '')
-                clean = _re.sub(r'\n*---\s*Slide\s*\d+\s*---\n*', '\n', raw)
-                clean = _re.sub(r'\n*---\s*Página\s*\d+\s*---\n*', '\n', clean)
-                lines = [l.strip() for l in clean.split('\n')
-                         if l.strip() and len(l.strip()) >= 3
-                         and not _re.match(r'^\d{1,3}$', l.strip())
-                         and not _re.match(r'^20[\dXx]{2}$', l.strip())
-                         and not _re.search(r'pie de p[aá]gina|footer|placeholder|click to edit|haga clic', l, _re.IGNORECASE)]
-                clean = '\n'.join(lines).strip()
+                clean = _clean_chunk_content(raw)
                 if clean and len(clean) >= 15:
                     title = item.get('metadata', {}).get('item_title', '')
                     context_text += f"\n[Doc {i+1}] {title}\n{clean}"
@@ -1955,15 +1394,7 @@ def extension_ask(request):
         answer = ai_response.get('answer', '')
         tokens = ai_response.get('tokens_used', 0)
 
-        # Limpiar respuesta
-        try:
-            from textwrap import dedent
-            if answer:
-                answer = dedent(answer).strip()
-                answer = '\n'.join(l.rstrip() for l in answer.splitlines())
-                answer = _re.sub(r'\n{3,}', '\n\n', answer)
-        except Exception:
-            pass
+        answer = _clean_ai_answer(answer)
 
         # Guardar mensaje
         ChatMessage.objects.create(

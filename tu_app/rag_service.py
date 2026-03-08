@@ -13,6 +13,7 @@ This file only contains Canvas-specific logic:
   - search_context()  — thin wrapper calling VectorStore.search()
 """
 
+import io
 import os
 import logging
 import warnings
@@ -127,7 +128,6 @@ class RAGService:
             logger.warning("pdfplumber not available, returning placeholder")
             return "[PDF Document - Text extraction not available]"
         try:
-            import io
             logger.info(f"Extracting PDF ({len(pdf_bytes)} bytes) with pdfplumber")
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 logger.info(f"PDF pages: {len(pdf.pages)}")
@@ -197,7 +197,6 @@ class RAGService:
             logger.warning("python-pptx not available")
             return None
         try:
-            import io
             logger.info(f"Extracting PPTX ({len(pptx_bytes)} bytes)")
             presentation = Presentation(io.BytesIO(pptx_bytes))
             logger.info(f"PPTX slides: {len(presentation.slides)}")
@@ -286,7 +285,6 @@ class RAGService:
             logger.warning("python-docx not available")
             return None
         try:
-            import io
             document = Document(io.BytesIO(docx_bytes))
             text = ""
             for paragraph in document.paragraphs:
@@ -309,7 +307,6 @@ class RAGService:
             logger.warning("openpyxl not available")
             return None
         try:
-            import io
             workbook = load_workbook(io.BytesIO(xlsx_bytes))
             text = ""
             for sheet_name in workbook.sheetnames:

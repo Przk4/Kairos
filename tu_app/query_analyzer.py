@@ -135,7 +135,7 @@ class QueryAnalyzer:
         if self.embedding_model is None:
             try:
                 from sentence_transformers import SentenceTransformer
-                self.embedding_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+                self.embedding_model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
                 logger.info("QueryAnalyzer: Loaded embedding model")
             except Exception as e:
                 logger.warning(f"QueryAnalyzer: Could not load embedding model: {e}")

@@ -333,60 +333,6 @@ Basándome en el material disponible: {self._extract_summary(context)}
 
 
 # ============================================================================
-# FACTOR DE SELECCIÓN
-# ============================================================================
-
-def get_ai_service(provider: Optional[str] = None) -> AIProvider:
-    """
-    Factory para obtener el proveedor de IA configurado.
-    
-    Args:
-        provider: Nombre del proveedor ('deepseek', 'huggingface', 'mock')
-                 Si es None, usa ACTIVE_PROVIDER
-    
-    Returns:
-        Instancia del proveedor
-    
-    Ejemplo:
-        # Usar proveedor por defecto
-        ai = get_ai_service()
-        
-        # Cambiar temporalmente a Mock
-        ai = get_ai_service('mock')
-        
-        # Cambiar a DeepSeek
-        ai = get_ai_service('deepseek')
-    """
-    
-    # Si no especificas, usa el configurado por defecto
-    if provider is None:
-        provider = ACTIVE_PROVIDER
-    
-    provider = provider.lower()
-    
-    if provider == 'deepseek':
-        try:
-            return DeepSeekProvider()
-        except ValueError:
-            logger.warning("DeepSeek no configurado, usando Mock")
-            return MockAIProvider()
-    
-    elif provider == 'huggingface':
-        try:
-            return HuggingFaceProvider()
-        except ValueError:
-            logger.warning("Hugging Face no configurado, usando Mock")
-            return MockAIProvider()
-    
-    elif provider == 'mock':
-        return MockAIProvider()
-    
-    else:
-        logger.warning(f"Proveedor desconocido: {provider}, usando Mock")
-        return MockAIProvider()
-
-
-# ============================================================================
 # CONFIGURACIÓN
 # ============================================================================
 

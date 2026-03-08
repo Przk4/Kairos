@@ -128,7 +128,7 @@ class ModuleItem(models.Model):
 
 class ModuleAnalysis(models.Model):
     """
-    Tracking de análisis de módulos con Piragi + embeddings.
+    Tracking de análisis de módulos con RAG + embeddings.
     Almacena metadatos sobre qué módulos han sido procesados.
     """
     STATUS_CHOICES = [
@@ -142,7 +142,7 @@ class ModuleAnalysis(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     vector_db_path = models.CharField(max_length=500, blank=True)  # Ruta o ID en ChromaDB
     total_items_processed = models.IntegerField(default=0)
-    embedding_model = models.CharField(max_length=100, default='sentence-transformers/all-MiniLM-L6-v2')
+    embedding_model = models.CharField(max_length=100, default='sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     error_message = models.TextField(blank=True)
@@ -164,7 +164,7 @@ class ModuleEmbedding(models.Model):
     """
     module = models.OneToOneField(Module, on_delete=models.CASCADE, related_name='embedding')
     embedding_data = models.JSONField(blank=True, default=dict)
-    model_name = models.CharField(max_length=100, default='sentence-transformers/all-MiniLM-L6-v2')
+    model_name = models.CharField(max_length=100, default='sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
     document_count = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

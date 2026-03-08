@@ -170,18 +170,13 @@
     <script src="/static/js/module-status-sync.js"></script>
 
     <script>
-    console.log('[INIT] Script loaded');
-    
     document.addEventListener('DOMContentLoaded', function() {
-        console.log('[DOMContentLoaded] Page loaded');
-        console.log('[DOMContentLoaded] Note: Module status sync is automatic via module-status-sync.js');
         document.addEventListener('click', function(e) {
             const button = e.target.closest('.analyze-btn');
             if (!button) return;
             
             e.preventDefault();
             const moduleId = button.dataset.moduleId;
-            console.log(`[CLICK] Clicked analyze button for module: ${moduleId}`);
             
             if (!moduleId) {
                 console.error('[CLICK] No moduleId found!');
@@ -191,26 +186,15 @@
             
             analyzeModule(button, moduleId);
         });
-        
-        console.log('[DOMContentLoaded] Initialization complete');
     });
-
-    // Sincronizar estado usando funciones centralizadas
-    // Ver module-status-sync.js para la implementación compartida
-    function syncModuleState(moduleId, button) {
-        syncModuleStatus(moduleId, button, 'button');
-    }
 
     // Ejecutar análisis
     function analyzeModule(button, moduleId) {
-        console.log(`[ANALYZE] Starting analysis for module ${moduleId}`);
-        
         button.disabled = true;
         button.textContent = '⏳ Analizando...';
         button.style.background = '#ffc107';
         
         const csrfToken = getCSRFToken();
-        console.log(`[ANALYZE] CSRF token: ${csrfToken ? 'Found' : 'NOT FOUND'}`);
         
         fetch(`/api/analyze-module/${moduleId}/`, {
             method: 'POST',
@@ -220,25 +204,21 @@
             }
         })
         .then(response => {
-            console.log(`[ANALYZE] Response status: ${response.status}`);
             if (!response.ok) {
                 console.error(`[ANALYZE] HTTP Error: ${response.status}`);
             }
             return response.json();
         })
         .then(data => {
-            console.log(`[ANALYZE] Response data:`, data);
             button.disabled = false;
             
             if (data.status === 'completed') {
                 button.textContent = '🔄 Re-analizar';
                 button.style.background = '#28a745';
-                console.log('[ANALYZE] ✅ Analysis completed');
                 alert('✅ ' + data.message);
             } else {
                 button.textContent = '🔍 Reintentar análisis';
                 button.style.background = '#6c757d';
-                console.log('[ANALYZE] ❌ Analysis failed:', data.error);
                 alert('Error: ' + (data.error || 'Unknown error'));
             }
         })
