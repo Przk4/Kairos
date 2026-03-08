@@ -60,38 +60,36 @@
         <div class="status-card">
             <h2>🔍 Estado del Análisis RAG</h2>
             
-            {% with status=analysis.status %}
-                {% if status == 'completed' %}
-                    <span class="status-badge completed">✅ Analizado</span>
-                    <p>Este módulo ha sido analizado y está listo para hacer preguntas.</p>
-                    <div class="stats">
-                        <div class="stat-box">
-                            <div class="stat-number">{{ analysis.total_items_processed }}</div>
-                            <div class="stat-label">Ítems procesados</div>
-                        </div>
-                        <div class="stat-box">
-                            <div class="stat-number">{{ analysis.embedding_model|truncatewords:1 }}</div>
-                            <div class="stat-label">Modelo de embeddings</div>
-                        </div>
+            {% if analysis and analysis.status == 'completed' %}
+                <span class="status-badge completed">✅ Analizado</span>
+                <p>Este módulo ha sido analizado y está listo para hacer preguntas.</p>
+                <div class="stats">
+                    <div class="stat-box">
+                        <div class="stat-number">{{ analysis.total_items_processed }}</div>
+                        <div class="stat-label">Ítems procesados</div>
                     </div>
-                {% elif status == 'analyzing' %}
-                    <span class="status-badge analyzing">⏳ Analizando...</span>
-                    <p>El sistema está analizando el contenido del módulo. Por favor, espera.</p>
-                {% elif status == 'failed' %}
-                    <span class="status-badge failed">❌ Error</span>
-                    <p>Hubo un error en el análisis. Por favor, intenta de nuevo.</p>
-                    {% if analysis.error_message %}
-                        <div class="error-message">
-                            <strong>Error:</strong> {{ analysis.error_message }}
-                        </div>
-                    {% endif %}
-                    <button class="analyze-btn" onclick="analyzeModule()">🔄 Reintentar análisis</button>
-                {% else %}
-                    <span class="status-badge pending">⚫ Sin analizar</span>
-                    <p>Este módulo aún no ha sido analizado. Haz clic en el botón para comenzar.</p>
-                    <button class="analyze-btn" id="analyzeBtn" onclick="analyzeModule()">🔍 Analizar módulo</button>
+                    <div class="stat-box">
+                        <div class="stat-number">{{ analysis.embedding_model|truncatewords:1 }}</div>
+                        <div class="stat-label">Modelo de embeddings</div>
+                    </div>
+                </div>
+            {% elif analysis and analysis.status == 'analyzing' %}
+                <span class="status-badge analyzing">⏳ Analizando...</span>
+                <p>El sistema está analizando el contenido del módulo. Por favor, espera.</p>
+            {% elif analysis and analysis.status == 'failed' %}
+                <span class="status-badge failed">❌ Error</span>
+                <p>Hubo un error en el análisis. Por favor, intenta de nuevo.</p>
+                {% if analysis.error_message %}
+                    <div class="error-message">
+                        <strong>Error:</strong> {{ analysis.error_message }}
+                    </div>
                 {% endif %}
-            {% endwith %}
+                <button class="analyze-btn" id="analyzeBtn" onclick="analyzeModule()">🔄 Reintentar análisis</button>
+            {% else %}
+                <span class="status-badge pending">⚫ Sin analizar</span>
+                <p>Este módulo aún no ha sido analizado. Haz clic en el botón para comenzar.</p>
+                <button class="analyze-btn" id="analyzeBtn" onclick="analyzeModule()">🔍 Analizar módulo</button>
+            {% endif %}
         </div>
 
         <!-- Lista de ítems -->

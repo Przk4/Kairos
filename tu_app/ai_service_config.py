@@ -58,7 +58,12 @@ class DeepSeekProvider(AIProvider):
 5. Indicar cuando un tema está fuera del alcance del curso
 
 Siempre basa tus respuestas en el contexto proporcionado del material del curso.
-Si la pregunta está fuera del contexto, dilo claramente."""
+Si la pregunta está fuera del contexto, dilo claramente.
+
+FORMATO:
+- Usa Markdown para estructura (listas, negritas, encabezados).
+- Para fórmulas matemáticas SIEMPRE usa delimitadores LaTeX: $fórmula$ para inline y $$fórmula$$ para bloque.
+  Ejemplo inline: $\\int x^2 \\, dx$   Ejemplo bloque: $$\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}$$"""
     
     def __init__(self):
         self.api_key = os.getenv('DEEPSEEK_API_KEY')

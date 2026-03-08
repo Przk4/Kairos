@@ -12,6 +12,7 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; overflow: hidden; }
         body { font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; background-color: #f5f7fa; color: #1a1a2e; }
 
         .container { display: flex; height: 100vh; }
@@ -293,14 +294,36 @@
 
     /**
      * Render raw text to safe HTML:
-     *  1. Markdown → HTML (via marked)
-     *  2. Sanitize (via DOMPurify — allows class for highlight spans)
-     *  3. KaTeX: render $…$ and $$…$$ formulas
-     *  4. highlight.js: highlight un-tagged code blocks
+     *  1. Protect LaTeX blocks from markdown processing
+     *  2. Markdown → HTML (via marked)
+     *  3. Sanitize (via DOMPurify — allows class for highlight spans)
+     *  4. Restore LaTeX blocks
+     *  5. KaTeX + highlight.js applied later via postProcessElement()
      */
     function renderMarkdown(rawText) {
         if (!rawText) return '';
         let text = rawText;
+
+        // --- Step 0: Protect LaTeX blocks from marked.js ---
+        // marked.js strips backslashes from \( \) \[ \], breaking KaTeX delimiters.
+        // We extract LaTeX blocks, replace with placeholders, then restore after markdown.
+        const latexBlocks = [];
+        function stashLatex(match) {
+            latexBlocks.push(match);
+            return '\x00LATEX' + (latexBlocks.length - 1) + '\x00';
+        }
+        // Display math: $$...$$ (multiline ok)
+        text = text.replace(/\$\$([\s\S]*?)\$\$/g, stashLatex);
+        // Display math: \[...\]
+        text = text.replace(/\\\[([\s\S]*?)\\\]/g, function(m, inner) {
+            return stashLatex('$$' + inner + '$$');
+        });
+        // Inline math: \(...\)
+        text = text.replace(/\\\(([\s\S]*?)\\\)/g, function(m, inner) {
+            return stashLatex('$' + inner + '$');
+        });
+        // Inline math: $...$ (single line, non-greedy)
+        text = text.replace(/\$([^\$\n]+?)\$/g, stashLatex);
 
         // --- Step 1: Markdown → HTML ---
         let html;
@@ -330,6 +353,11 @@
         } catch (e) {
             console.warn('DOMPurify failed', e);
         }
+
+        // --- Step 3: Restore LaTeX blocks ---
+        latexBlocks.forEach(function(block, i) {
+            html = html.replace('\x00LATEX' + i + '\x00', block);
+        });
 
         return html;
     }

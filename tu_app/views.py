@@ -319,7 +319,10 @@ def module_detail(request, module_id):
     try:
         module = Module.objects.get(id=module_id, course__user=request.user)
         items = module.items.all()
-        analysis = module.analysis
+        try:
+            analysis = module.analysis
+        except ModuleAnalysis.DoesNotExist:
+            analysis = None
         
         return render(request, 'tu_app/module_detail.html', {
             'module': module,
@@ -1673,7 +1676,8 @@ def check_module_analysis_status(request, module_id):
         except ModuleEmbedding.DoesNotExist:
             has_embeddings_in_db = False
         
-        is_analyzed = has_embeddings_in_db
+        # Considerar analizado si el status es 'completed' O hay embeddings en BD
+        is_analyzed = (db_status == 'completed') or has_embeddings_in_db
         
         return JsonResponse({
             'status': 'ok',
