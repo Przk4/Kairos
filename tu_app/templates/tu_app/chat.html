@@ -116,9 +116,11 @@
         .msg-text img { max-width: 100%; border-radius: 6px; margin: 0.4em 0; }
 
         /* KaTeX overrides inside bubbles */
-        .msg-text .katex-display { margin: 0.6em 0; overflow-x: auto; overflow-y: hidden; }
-        .message.ai .msg-text .katex { font-size: 1.05em; color: #1a1a2e; }
-        .message.student .msg-text .katex { font-size: 1.05em; color: #fff; }
+        /* Make formulas larger and bold for better readability */
+        .msg-text .katex { font-weight: 700; line-height: 1.15; }
+        .msg-text .katex-display { margin: 0.6em 0; overflow-x: auto; overflow-y: hidden; font-size: 1.35em; font-weight: 700; }
+        .message.ai .msg-text .katex { font-size: 1.15em; color: #1a1a2e; }
+        .message.student .msg-text .katex { font-size: 1.15em; color: #fff; }
 
         .message-time { font-size: 0.75em; color: #9ca3af; margin-top: 5px; padding: 0 5px; }
 
