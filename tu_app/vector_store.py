@@ -452,12 +452,14 @@ class VectorStore:
                 ):
                     sim = max(0.0, 1.0 - dist / 2.0)
                     imp = self._importance_from_meta(meta)
-                    combined = (1 - w) * sim + w * imp
+                    kw = self._keyword_boost(query, doc)
+                    combined = (1 - w) * sim + w * imp + kw
                     candidates.append({
                         'content': doc,
                         'metadata': meta,
                         'relevance_score': sim,
                         'importance_score': imp,
+                        'keyword_boost': kw,
                         'combined_score': combined,
                     })
             candidates.sort(key=lambda x: x['combined_score'], reverse=True)
@@ -482,12 +484,14 @@ class VectorStore:
             ev = np.array(vec)
             sim = float(np.dot(qvec, ev) / (np.linalg.norm(qvec) * np.linalg.norm(ev) + 1e-10))
             imp = self._importance_from_meta(meta)
-            combined = (1 - w) * sim + w * imp
+            kw = self._keyword_boost(query, doc)
+            combined = (1 - w) * sim + w * imp + kw
             scored.append({
                 'content': doc,
                 'metadata': meta,
                 'relevance_score': sim,
                 'importance_score': imp,
+                'keyword_boost': kw,
                 'combined_score': combined,
             })
         scored.sort(key=lambda x: x['combined_score'], reverse=True)
@@ -499,6 +503,31 @@ class VectorStore:
             return float(meta.get('importance_score', 0.5))
         except (ValueError, TypeError):
             return 0.5
+
+    @staticmethod
+    def _keyword_boost(query: str, document: str) -> float:
+        """Lexical boost: reward chunks that contain query keywords.
+
+        Returns a value in [0.0, 0.30].  A chunk that contains ALL
+        important query terms gets the full 0.30 boost; partial matches
+        get a proportional fraction.  Stop-words are ignored.
+        """
+        _STOP = {
+            'a', 'al', 'con', 'de', 'del', 'el', 'en', 'es', 'la', 'las',
+            'lo', 'los', 'o', 'para', 'por', 'que', 'se', 'son', 'su', 'un',
+            'una', 'y', 'the', 'is', 'of', 'and', 'in', 'to', 'a', 'an',
+            'it', 'for', 'on', 'are', 'was', 'what', 'how', 'which', 'who',
+            'me', 'dame', 'dime', 'can', 'do', 'this', 'that',
+        }
+        q_words = [
+            w for w in re.findall(r'\b[\w]{2,}\b', query.lower())
+            if w not in _STOP
+        ]
+        if not q_words:
+            return 0.0
+        doc_lower = document.lower()
+        hits = sum(1 for w in q_words if w in doc_lower)
+        return 0.30 * (hits / len(q_words))
 
     def _load_json_store(self) -> None:
         for p in Path(self.json_dir).glob('*.json'):

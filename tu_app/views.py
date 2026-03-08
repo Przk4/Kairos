@@ -614,17 +614,19 @@ def chat_api(request):
                 logger.info(f"[CHAT] Searched module {module.id}: requested={optimal_fragments}, got={len(context)}")
             else:
                 # Buscar en todos los módulos del curso
-                # Dividir fragmentos entre módulos
-                fragments_per_module = max(2, optimal_fragments // max(1, course.modules.count()))
+                # Pedir más resultados por módulo, luego re-rankear globalmente
                 context = []
                 for mod in course.modules.all():
                     mod_context = rag_service.search_context(
                         question, mod.id, course.id, 
-                        top_k=fragments_per_module,
-                        query_type=query_type  # NUEVO: Para ranking jerárquico
+                        top_k=optimal_fragments,
+                        query_type=query_type
                     )
                     context.extend(mod_context)
-                logger.info(f"[CHAT] Searched {course.modules.count()} modules: requested={optimal_fragments}, per_module={fragments_per_module}, got={len(context)}")
+                # Re-rank global: ordenar TODOS los resultados y quedarse con los mejores
+                context.sort(key=lambda x: x.get('combined_score', 0), reverse=True)
+                context = context[:optimal_fragments]
+                logger.info(f"[CHAT] Searched {course.modules.count()} modules: global re-rank top {optimal_fragments} from {len(context)} candidates")
             
             # Extraer información de embeddings para debug
             embeddings_info = []

@@ -263,15 +263,15 @@ class RAGService:
                     continue
 
                 block = (
-                    f"\n{clean_title}\n{clean_body}" if clean_body
-                    else f"\n{clean_title}"
-                ) if clean_title else f"\n{clean_body}"
+                    f"\n\n{clean_title}\n{clean_body}" if clean_body
+                    else f"\n\n{clean_title}"
+                ) if clean_title else f"\n\n{clean_body}"
                 all_slide_texts.append(block)
 
             if not all_slide_texts:
                 return "[PPTX vacío o sin contenido de texto]"
 
-            final_text = '\n'.join(all_slide_texts)
+            final_text = '\n\n'.join(all_slide_texts)
             logger.info(
                 f"PPTX: {len(all_slide_texts)} slides kept, {skipped} skipped, "
                 f"{len(self._last_pptx_tables)} tables, {len(final_text)} chars"
