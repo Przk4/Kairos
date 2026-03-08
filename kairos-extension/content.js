@@ -26,7 +26,7 @@
   host.id = 'kairos-ext-root';
   host.style.cssText = 'all:initial;position:fixed;z-index:2147483647;pointer-events:none;top:0;left:0;width:0;height:0;';
   document.documentElement.appendChild(host);
-  const shadow = host.attachShadow({ mode: 'closed' });
+  const shadow = host.attachShadow({ mode: 'open' });
 
   // ── Inject Google Fonts (Inter) into host page head ──
   if (!document.querySelector('link[data-kairos-font]')) {
@@ -41,6 +41,7 @@
   const style = document.createElement('style');
   style.textContent = `
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    @import url('https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css');
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -398,6 +399,46 @@
   `;
   shadow.appendChild(popup);
 
+  // Inject a small page script that loads KaTeX and exposes a render trigger.
+  // This runs in the page context so it can load external libs and access the
+  // shadow root (we created an open shadow root above).
+  (function injectKaTeXLoader(){
+    try {
+      const loader = document.createElement('script');
+      loader.type = 'text/javascript';
+      loader.textContent = `(function(){
+        if(window.__kairos_katex_ready) return;
+        function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
+        Promise.resolve()
+          .then(()=>loadScript('https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js'))
+          .then(()=>loadScript('https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js'))
+          .then(()=>{window.__kairos_katex_ready=true;console.info('[Kairos] KaTeX loaded');})
+          .catch(e=>{console.warn('[Kairos] KaTeX load failed', e)});
+
+        window.kairosRenderLatex = function(){
+          try{
+            if(!window.__kairos_katex_ready) return;
+            const host = document.getElementById('kairos-ext-root');
+            if(!host || !host.shadowRoot) return;
+            // Use auto-render to find $...$ and $$...$$ delimiters
+            renderMathInElement(host.shadowRoot, {
+              delimiters: [
+                {left: '$$', right: '$$', display: true},
+                {left: '$', right: '$', display: false}
+              ],
+              ignoredTags: ['script','noscript','style','textarea','pre']
+            });
+          }catch(err){console.warn('[Kairos] renderLatex error', err)}
+        };
+
+        window.addEventListener('kairos-render-latex', ()=>{ window.kairosRenderLatex && window.kairosRenderLatex(); });
+      })();`;
+      document.documentElement.appendChild(loader);
+    } catch (e) {
+      console.warn('[Kairos] injectKaTeXLoader failed', e);
+    }
+  })();
+
   // ── Refs ──
   const $ = (s) => shadow.querySelector(s);
   const closeBtn = $('#kairosClose');
@@ -547,6 +588,8 @@
 
       if (res && res.success) {
         answerEl.innerHTML = miniMarkdown(res.response || res.answer || '');
+        // Trigger KaTeX rendering in the page script (it will render math in the shadow root)
+        try{ window.dispatchEvent(new Event('kairos-render-latex')); }catch(e){}
         responseEl.style.display = 'block';
       } else {
         const msg = (res && res.message) || 'Error desconocido';
