@@ -433,7 +433,7 @@ def analyze_module_api(request, module_id):
                         defaults={
                             'embedding_data': embedding_data,
                             'document_count': doc_count,
-                            'model_name': 'sentence-transformers/all-MiniLM-L6-v2',
+                            'model_name': 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',
                         }
                     )
                     logger.info(f"✅ ModuleEmbedding saved for module {module.id}: {doc_count} documents ({'created' if created else 'updated'})")
@@ -1325,7 +1325,7 @@ def debug_rag_status(request):
             'backend': 'chromadb' if rag_service.using_chromadb else 'in_memory',
             'chromadb_available': bool(rag_service.client),
             'persistent_dir': rag_service.persistent_dir if rag_service.using_chromadb else None,
-            'embedding_model': 'all-MiniLM-L6-v2',
+            'embedding_model': 'paraphrase-multilingual-MiniLM-L12-v2',
         }
         
         # Si es ChromaDB, contar colecciones
@@ -1355,7 +1355,7 @@ def debug_rag_status(request):
             )
         
         # Agregar versión del código para diagnóstico
-        info['code_version'] = '2024-03-04-v2-cosine-fix'
+        info['code_version'] = '2026-03-08-v3-clean-chunking'
         info['similarity_formula'] = '1 - (distance / 2)'
         
         return JsonResponse({
@@ -1391,7 +1391,7 @@ def debug_search_test(request):
             'course_id': course_id,
             'top_k': top_k,
             'collection_name': collection_name,
-            'code_version': '2024-03-04-v2-cosine-fix',
+            'code_version': '2026-03-08-v3-clean-chunking',
         }
         
         if rag_service.using_chromadb and rag_service.client:

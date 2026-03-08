@@ -131,13 +131,14 @@ class RAGService:
             logger.info(f"Extracting PDF ({len(pdf_bytes)} bytes) with pdfplumber")
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 logger.info(f"PDF pages: {len(pdf.pages)}")
-                text = ""
+                pages = []
                 for page_num, page in enumerate(pdf.pages):
                     page_text = page.extract_text()
-                    if page_text:
-                        text += f"\n--- Página {page_num + 1} ---\n{page_text}"
+                    if page_text and page_text.strip():
+                        pages.append(page_text.strip())
                     else:
                         logger.warning(f"Page {page_num + 1}: no text extracted")
+                text = '\n\n'.join(pages)
                 return text if text.strip() else "[PDF vacío o no legible]"
         except Exception as e:
             logger.error(f"Error extracting PDF text: {e}", exc_info=True)
@@ -601,7 +602,6 @@ class RAGService:
 
             items = module.items.all()
             embeddings_count = 0
-            analyzed_documents = []
 
             for i, item in enumerate(items):
                 try:
@@ -625,7 +625,7 @@ class RAGService:
                         continue
 
                     # Accumulate per-item docs for a single upsert call
-                    docs, metas, ids, embs = [], [], [], []
+                    docs, metas, ids = [], [], []
 
                     if extracted:
                         raw_chunks = self.vector_store.chunk_semantic(
@@ -648,7 +648,6 @@ class RAGService:
                             )
                             ids.append(f"item_{item.id}_chunk_{chunk_idx}")
                             docs.append(chunk)
-                            embs.append(self.vector_store.embedding_model.encode(chunk).tolist())
                             metas.append({
                                 'item_id': str(item.id),
                                 'item_title': item.title,
@@ -671,9 +670,6 @@ class RAGService:
                                 continue
                             ids.append(f"item_{item.id}_table_{tbl_idx}")
                             docs.append(table_text_clean)
-                            embs.append(
-                                self.vector_store.embedding_model.encode(table_text_clean).tolist()
-                            )
                             metas.append({
                                 'item_id': str(item.id),
                                 'item_title': item.title,
@@ -712,9 +708,6 @@ class RAGService:
                                     )
                                     ids.append(f"item_{item.id}_img_{img_idx}")
                                     docs.append(img_doc)
-                                    embs.append(
-                                        self.vector_store.embedding_model.encode(img_doc).tolist()
-                                    )
                                     metas.append({
                                         'item_id': str(item.id),
                                         'item_title': item.title,
@@ -734,7 +727,6 @@ class RAGService:
                         # Title-only fallback
                         ids.append(f"item_{item.id}")
                         docs.append(text)
-                        embs.append(self.vector_store.embedding_model.encode(text).tolist())
                         metas.append({
                             'item_id': str(item.id),
                             'item_title': item.title,
@@ -745,6 +737,8 @@ class RAGService:
                         })
 
                     if docs:
+                        # Batch encode all docs at once (much faster than one-by-one)
+                        embs = self.vector_store.encode(docs)
                         self.vector_store.upsert(collection_name, docs, metas, ids, embs)
                         embeddings_count += len(docs)
                         debug_service.log_embedding_created(item.id, item.title, len(embs[-1]))
@@ -754,7 +748,6 @@ class RAGService:
                     debug_service.log_error("EMBEDDING", f"Error procesando item {item.id}", e)
                     continue
 
-            debug_service.log_analyzed_documents(module.id, module.name, analyzed_documents)
             debug_service.log_rag_analysis_complete(module.id, len(items), embeddings_count)
             logger.info(f"Module analysis complete: {len(items)} items, {embeddings_count} embeddings")
 

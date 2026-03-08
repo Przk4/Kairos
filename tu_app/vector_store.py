@@ -251,41 +251,73 @@ class VectorStore:
         chunk_size: int = 1000,
         overlap: int = 200,
     ) -> List[str]:
-        """Split *text* into overlapping windows, snapping at sentence or word boundaries."""
-        if not text or not text.strip():
-            return [text] if text else ['']
+        """Split *text* into overlapping windows, always at word boundaries."""
+        text = (text or '').strip()
+        if not text:
+            return ['']
         if len(text) <= chunk_size:
             return [text]
-        chunks, start = [], 0
-        while start < len(text):
-            end = start + chunk_size
-            if end < len(text):
-                # Try to snap to the last sentence boundary within the window
-                snap = self._find_sentence_break(text, start, end)
-                if snap > start:
-                    end = snap
-                else:
-                    # Fall back to last whitespace
-                    space = text.rfind(' ', start, end)
-                    if space > start:
-                        end = space
+
+        chunks = []
+        start = 0
+        text_len = len(text)
+
+        while start < text_len:
+            end = min(start + chunk_size, text_len)
+
+            # Snap end backward to a sentence or word boundary
+            if end < text_len:
+                end = self._snap_end(text, start, end)
+
             chunk = text[start:end].strip()
             if chunk:
                 chunks.append(chunk)
-            # Advance: avoid zero-progress
-            next_start = end - overlap
+
+            if end >= text_len:
+                break
+
+            # Overlap: back up, then snap forward to word boundary
+            next_start = max(start + 1, end - overlap)
+            next_start = self._snap_start(text, next_start, text_len)
+
+            # Guarantee forward progress
             if next_start <= start:
-                next_start = start + max(1, chunk_size // 2)
+                next_start = end
+
             start = next_start
+
         return chunks or [text]
 
     @staticmethod
-    def _find_sentence_break(text: str, start: int, end: int) -> int:
-        """Return position after the last sentence-ending punctuation in text[start:end]."""
+    def _snap_end(text: str, start: int, end: int) -> int:
+        """Snap *end* backward to nearest sentence or word boundary."""
+        min_pos = start + (end - start) // 2
+        # Prefer last sentence-ending punctuation (.!? followed by space/end)
         best = -1
         for m in re.finditer(r'[.!?](?:\s|$)', text[start:end]):
-            best = start + m.end()
-        return best
+            pos = start + m.start() + 1  # include the punctuation char
+            if pos >= min_pos:
+                best = pos
+        if best > 0:
+            return best
+        # Fall back to last whitespace
+        space = text.rfind(' ', min_pos, end)
+        return space if space > start else end
+
+    @staticmethod
+    def _snap_start(text: str, pos: int, text_len: int) -> int:
+        """If *pos* is mid-word, advance to the start of the next word."""
+        if pos <= 0 or pos >= text_len:
+            return pos
+        # Already at a word start (previous char is whitespace)
+        if text[pos - 1].isspace():
+            return pos
+        # Mid-word — skip past current word, then past whitespace
+        while pos < text_len and not text[pos].isspace():
+            pos += 1
+        while pos < text_len and text[pos].isspace():
+            pos += 1
+        return pos
 
     def chunk_semantic(
         self,
