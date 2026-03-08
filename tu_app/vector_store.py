@@ -280,16 +280,24 @@ class VectorStore:
         if len(text) <= max_chunk_size:
             return [text]
 
-        # Build segments from paragraphs / sentences
+        # Minimum useful chunk size — never flush below this
+        min_chunk_size = max(200, max_chunk_size // 5)
+
+        # Build segments: merge single newlines (PDF lines), split only
+        # at real paragraph breaks (double newline) or sentence boundaries
+        # in long blocks.
         segments = []
         for para in re.split(r'\n{2,}', text.strip()):
             para = para.strip()
             if not para:
                 continue
+            # Re-join single-newline line breaks inside a paragraph
+            para = re.sub(r'(?<!\n)\n(?!\n)', ' ', para)
             if len(para) < 300:
                 segments.append(para)
             else:
-                for seg in re.split(r'(?<=[.!?])\s+|\n', para):
+                # Split at sentence boundaries only (not bare newlines)
+                for seg in re.split(r'(?<=[.!?])\s+', para):
                     seg = seg.strip()
                     if seg and len(seg) > 10:
                         segments.append(seg)
@@ -312,15 +320,18 @@ class VectorStore:
             if sim < similarity_threshold:
                 breakpoints.add(i + 1)
 
-        # Group segments into chunks, respecting max_chunk_size and breakpoints
+        # Group segments into chunks.
+        # Only flush at breakpoints when the chunk has reached min_chunk_size.
         chunks, buf, buf_len = [], [], 0
         for i, seg in enumerate(segments):
+            # Hard limit: flush if adding this segment exceeds max_chunk_size
             if buf_len + len(seg) > max_chunk_size and buf:
                 chunks.append('\n'.join(buf))
                 buf, buf_len = [], 0
             buf.append(seg)
             buf_len += len(seg) + 1
-            if i in breakpoints and buf:
+            # Only flush at topic breakpoint if chunk is large enough
+            if i in breakpoints and buf_len >= min_chunk_size:
                 chunks.append('\n'.join(buf))
                 buf, buf_len = [], 0
         if buf:
