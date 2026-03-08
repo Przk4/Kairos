@@ -116,11 +116,33 @@
         .msg-text img { max-width: 100%; border-radius: 6px; margin: 0.4em 0; }
 
         /* KaTeX overrides inside bubbles */
-        /* Make formulas larger and bold for better readability */
+        /* Make formulas larger and bold for better readability and avoid splits */
         .msg-text .katex { font-weight: 700; line-height: 1.15; }
-        .msg-text .katex-display { margin: 0.6em 0; overflow-x: auto; overflow-y: hidden; font-size: 1.35em; font-weight: 700; }
-        .message.ai .msg-text .katex { font-size: 1.15em; color: #1a1a2e; }
-        .message.student .msg-text .katex { font-size: 1.15em; color: #fff; }
+        .msg-text .katex-display {
+            margin: 0.6em 0;
+            overflow-x: auto;
+            overflow-y: hidden;
+            font-size: 1.35em;
+            font-weight: 700;
+            display: block;
+            /* Prevent the browser from breaking a display formula across boxes/pages */
+            page-break-inside: avoid;
+            break-inside: avoid;
+            -webkit-column-break-inside: avoid;
+            -moz-column-break-inside: avoid;
+            /* Ensure the formula stays as an atomic block */
+            white-space: normal;
+        }
+        .message.ai .msg-text .katex { font-size: 1.15em; color: #1a1a2e; page-break-inside: avoid; }
+        .message.student .msg-text .katex { font-size: 1.15em; color: #fff; page-break-inside: avoid; }
+
+        /* Avoid splitting paragraphs or inline formulas inside the same message bubble */
+        .message-content, .msg-text, .msg-text p, .msg-text div {
+            page-break-inside: avoid;
+            break-inside: avoid;
+            -webkit-column-break-inside: avoid;
+            -moz-column-break-inside: avoid;
+        }
 
         .message-time { font-size: 0.75em; color: #9ca3af; margin-top: 5px; padding: 0 5px; }
 
