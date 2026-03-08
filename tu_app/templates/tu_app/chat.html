@@ -309,8 +309,9 @@
         // We extract LaTeX blocks, replace with placeholders, then restore after markdown.
         const latexBlocks = [];
         function stashLatex(match) {
+            const idx = latexBlocks.length;
             latexBlocks.push(match);
-            return '\x00LATEX' + (latexBlocks.length - 1) + '\x00';
+            return `<span class="latex-placeholder latex-${idx}"></span>`;
         }
         // Display math: $$...$$ (multiline ok)
         text = text.replace(/\$\$([\s\S]*?)\$\$/g, stashLatex);
@@ -355,8 +356,11 @@
         }
 
         // --- Step 3: Restore LaTeX blocks ---
+        // Replace the placeholder spans inserted earlier. Use a safe regex to
+        // match the exact span created by stashLatex.
         latexBlocks.forEach(function(block, i) {
-            html = html.replace('\x00LATEX' + i + '\x00', block);
+            const placeholder = new RegExp(`<span\\s+class=\"latex-placeholder\\s+latex-${i}\\"></span>`, 'g');
+            html = html.replace(placeholder, block);
         });
 
         return html;
