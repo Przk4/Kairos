@@ -619,9 +619,10 @@ def chat_api(request):
             # Si no hay módulo específico, buscamos en todos
             if module:
                 context = rag_service.search_context(
-                    question, module.id, course.id, 
+                    question, module.id, course.id,
                     top_k=optimal_fragments,
-                    query_type=query_type  # NUEVO: Para ranking jerárquico
+                    query_type=query_type,
+                    search_terms=query_analysis.get('search_terms'),
                 )
                 logger.info(f"[CHAT] Searched module {module.id}: requested={optimal_fragments}, got={len(context)}")
             else:
@@ -630,9 +631,10 @@ def chat_api(request):
                 context = []
                 for mod in course.modules.all():
                     mod_context = rag_service.search_context(
-                        question, mod.id, course.id, 
+                        question, mod.id, course.id,
                         top_k=optimal_fragments,
-                        query_type=query_type
+                        query_type=query_type,
+                        search_terms=query_analysis.get('search_terms'),
                     )
                     context.extend(mod_context)
                 # Re-rank global: ordenar TODOS los resultados y quedarse con los mejores

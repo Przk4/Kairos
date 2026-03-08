@@ -206,19 +206,23 @@ class VectorStore:
         query_type: str = 'general',
         importance_weight: Optional[float] = None,
         where: Optional[dict] = None,
+        search_terms: Optional[List[str]] = None,
     ) -> List[dict]:
         """
         Semantic search in *collection*.
 
         Combined score = (1 - w) * cosine_similarity + w * importance_score,
         where w is derived from *query_type* unless *importance_weight* given.
+
+        If *search_terms* are provided (e.g. from AI query analysis) they are
+        used for the keyword-boost step instead of tokenising the raw query.
         """
         w = importance_weight if importance_weight is not None else \
             self.IMPORTANCE_WEIGHTS.get(query_type, 0.15)
 
         if self.using_chromadb and self.client:
-            return self._search_chromadb(collection, query, top_k, w, where)
-        return self._search_memory(collection, query, top_k, w)
+            return self._search_chromadb(collection, query, top_k, w, where, search_terms)
+        return self._search_memory(collection, query, top_k, w, search_terms)
 
     # ------------------------------------------------------------------
     # Public API — collection info
@@ -426,6 +430,7 @@ class VectorStore:
         top_k: int,
         w: float,
         where: Optional[dict],
+        search_terms: Optional[List[str]] = None,
     ) -> List[dict]:
         try:
             col = self.client.get_collection(collection)
@@ -451,7 +456,7 @@ class VectorStore:
                 ):
                     sim = max(0.0, 1.0 - dist / 2.0)
                     imp = self._importance_from_meta(meta)
-                    kw = self._keyword_boost(query, doc)
+                    kw = self._keyword_boost(query, doc, search_terms)
                     combined = (1 - w) * sim + w * imp + kw
                     candidates.append({
                         'content': doc,
@@ -473,6 +478,7 @@ class VectorStore:
         query: str,
         top_k: int,
         w: float,
+        search_terms: Optional[List[str]] = None,
     ) -> List[dict]:
         col = self._memory.get(collection)
         if not col or not col.get('documents'):
@@ -483,7 +489,7 @@ class VectorStore:
             ev = np.array(vec)
             sim = float(np.dot(qvec, ev) / (np.linalg.norm(qvec) * np.linalg.norm(ev) + 1e-10))
             imp = self._importance_from_meta(meta)
-            kw = self._keyword_boost(query, doc)
+            kw = self._keyword_boost(query, doc, search_terms)
             combined = (1 - w) * sim + w * imp + kw
             scored.append({
                 'content': doc,
@@ -504,13 +510,26 @@ class VectorStore:
             return 0.5
 
     @staticmethod
-    def _keyword_boost(query: str, document: str) -> float:
+    def _keyword_boost(
+        query: str,
+        document: str,
+        search_terms: 'Optional[List[str]]' = None,
+    ) -> float:
         """Lexical boost: reward chunks that contain query keywords.
 
         Returns a value in [0.0, 0.30].  A chunk that contains ALL
         important query terms gets the full 0.30 boost; partial matches
         get a proportional fraction.  Stop-words are ignored.
+
+        If *search_terms* are provided (e.g. AI-extracted concepts) they
+        are used instead of tokenising the raw query.
         """
+        doc_lower = document.lower()
+
+        if search_terms:
+            hits = sum(1 for t in search_terms if t.lower() in doc_lower)
+            return 0.30 * (hits / len(search_terms))
+
         _STOP = {
             'a', 'al', 'con', 'de', 'del', 'el', 'en', 'es', 'la', 'las',
             'lo', 'los', 'o', 'para', 'por', 'que', 'se', 'son', 'su', 'un',
@@ -524,7 +543,6 @@ class VectorStore:
         ]
         if not q_words:
             return 0.0
-        doc_lower = document.lower()
         hits = sum(1 for w in q_words if w in doc_lower)
         return 0.30 * (hits / len(q_words))
 

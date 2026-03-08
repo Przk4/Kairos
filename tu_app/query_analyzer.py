@@ -5,9 +5,11 @@ Usa el mismo modelo de embeddings (MiniLM) para clasificar preguntas
 sin necesidad de APIs externas ni modelos adicionales.
 """
 
+import json
+import os
 import re
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -126,6 +128,8 @@ class QueryAnalyzer:
         self.embedding_model = embedding_model
         self._example_embeddings = None
         self._initialized = False
+        self._ai_client = None
+        self._ai_available = None
     
     def _ensure_initialized(self):
         """Inicialización lazy de embeddings de ejemplos."""
@@ -215,7 +219,107 @@ class QueryAnalyzer:
             return best_type, confidence
         
         return 'general', 0.0
-    
+
+    # ------------------------------------------------------------------
+    # AI-based classification (primary method)
+    # ------------------------------------------------------------------
+
+    def _get_ai_client(self):
+        """Lazy-initialise the DeepSeek client for query analysis."""
+        if self._ai_available is False:
+            return None
+        if self._ai_client is not None:
+            return self._ai_client
+        try:
+            import openai
+            api_key = os.getenv('DEEPSEEK_API_KEY')
+            if not api_key:
+                self._ai_available = False
+                return None
+            self._ai_client = openai.OpenAI(
+                api_key=api_key,
+                base_url="https://api.deepseek.com",
+            )
+            self._ai_available = True
+            logger.info("QueryAnalyzer: AI client initialised")
+            return self._ai_client
+        except Exception as e:
+            logger.warning(f"QueryAnalyzer: AI client init failed: {e}")
+            self._ai_available = False
+            return None
+
+    def _classify_by_ai(self, question: str) -> Optional[Dict]:
+        """
+        Call DeepSeek to extract query_type, search_terms, detail_level,
+        confidence and reasoning.  Returns *None* on any failure so the
+        caller can fall back to the embedding/keyword hybrid.
+        """
+        client = self._get_ai_client()
+        if not client:
+            return None
+        try:
+            prompt = (
+                'Analiza esta pregunta de estudiante y devuelve SOLO un JSON '
+                'válido con esta estructura exacta:\n\n'
+                '{\n'
+                '  "query_type": "summary|definition|comparison|list|specific|explanation|general",\n'
+                '  "search_terms": ["concepto_clave_1", "concepto_clave_2"],\n'
+                '  "detail_level": "brief|normal|comprehensive",\n'
+                '  "confidence": 0.85,\n'
+                '  "reasoning": "Breve explicación"\n'
+                '}\n\n'
+                'Reglas para search_terms:\n'
+                '- Extrae 1-5 conceptos CLAVE que el estudiante busca entender\n'
+                '- El primer término debe ser el concepto principal\n'
+                '- Incluye sinónimos o términos técnicos relacionados si son relevantes\n'
+                '- NO incluyas stopwords, verbos genéricos ni palabras comunes\n'
+                '- Ejemplo: "qué es kaizen" → ["kaizen", "mejora continua"]\n'
+                '- Ejemplo: "diferencia entre ADN y ARN" → ["ADN", "ARN", "ácido nucleico"]\n'
+                '- Ejemplo: "cómo funciona la fotosíntesis" → ["fotosíntesis", "cloroplasto", "luz solar"]\n\n'
+                f'Pregunta: {question}\n\n'
+                'JSON:'
+            )
+
+            response = client.chat.completions.create(
+                model='deepseek-chat',
+                messages=[{'role': 'user', 'content': prompt}],
+                max_tokens=200,
+                temperature=0.1,
+            )
+
+            text = response.choices[0].message.content.strip()
+            # Strip possible markdown fences
+            if text.startswith('```'):
+                text = re.sub(r'^```(?:json)?\s*', '', text)
+                text = re.sub(r'\s*```$', '', text)
+
+            result = json.loads(text)
+
+            # --- Validate / sanitise ---
+            valid_types = {
+                'summary', 'definition', 'comparison',
+                'list', 'specific', 'explanation', 'general',
+            }
+            if result.get('query_type') not in valid_types:
+                result['query_type'] = 'general'
+
+            if result.get('detail_level') not in {'brief', 'normal', 'comprehensive'}:
+                result['detail_level'] = 'normal'
+
+            result['confidence'] = max(0.0, min(1.0, float(result.get('confidence', 0.5))))
+            result['search_terms'] = [str(t) for t in result.get('search_terms', [])][:5]
+            result.setdefault('reasoning', '')
+
+            logger.info(
+                f"QueryAnalyzer AI: type={result['query_type']}, "
+                f"terms={result['search_terms']}, conf={result['confidence']}"
+            )
+            return result
+
+        except Exception as e:
+            logger.warning(f"QueryAnalyzer AI classification failed: {e}")
+            return None
+
     def _detect_detail_level(self, question: str) -> str:
         """Detecta el nivel de detalle solicitado."""
         question_lower = question.lower()
@@ -307,55 +411,62 @@ class QueryAnalyzer:
             }
         
         question = question.strip()
-        
-        # Clasificación híbrida: embeddings + keywords
-        emb_type, emb_conf = self._classify_by_similarity(question)
-        kw_type, kw_conf = self._classify_by_keywords(question)
-        
-        # Combinar clasificaciones
-        if kw_conf > 0.6:
-            # Keywords tienen prioridad si son fuertes
-            query_type = kw_type
-            confidence = kw_conf
-            method = 'keywords'
-        elif emb_conf > 0.5:
-            # Usar clasificación por embeddings
-            query_type = emb_type
-            confidence = emb_conf
-            method = 'embeddings'
-        elif kw_conf > 0 and emb_conf > 0:
-            # Ambos detectaron algo, usar el de mayor confianza
-            if emb_conf >= kw_conf:
-                query_type = emb_type
-                confidence = emb_conf
-                method = 'embeddings'
-            else:
+
+        # --- 1. Primary: AI-based classification ---
+        ai_result = self._classify_by_ai(question)
+
+        if ai_result:
+            query_type = ai_result['query_type']
+            search_terms = ai_result['search_terms']
+            detail_level = ai_result['detail_level']
+            confidence = ai_result['confidence']
+            reasoning = ai_result.get('reasoning', '')
+            method = 'ai'
+            _debug = {'method_used': 'ai', 'ai_result': ai_result}
+        else:
+            # --- 2. Fallback: embedding + keyword hybrid ---
+            emb_type, emb_conf = self._classify_by_similarity(question)
+            kw_type, kw_conf = self._classify_by_keywords(question)
+
+            if kw_conf > 0.6:
                 query_type = kw_type
                 confidence = kw_conf
                 method = 'keywords'
-        else:
-            query_type = 'general'
-            confidence = 0.3
-            method = 'default'
-        
-        # Detectar nivel de detalle
-        detail_level = self._detect_detail_level(question)
-        
-        # Extraer términos de búsqueda
-        search_terms = self._extract_search_terms(question)
-        
-        # Calcular número óptimo de fragmentos
+            elif emb_conf > 0.5:
+                query_type = emb_type
+                confidence = emb_conf
+                method = 'embeddings'
+            elif kw_conf > 0 and emb_conf > 0:
+                if emb_conf >= kw_conf:
+                    query_type = emb_type
+                    confidence = emb_conf
+                    method = 'embeddings'
+                else:
+                    query_type = kw_type
+                    confidence = kw_conf
+                    method = 'keywords'
+            else:
+                query_type = 'general'
+                confidence = 0.3
+                method = 'default'
+
+            detail_level = self._detect_detail_level(question)
+            search_terms = self._extract_search_terms(question)
+            reasoning = (
+                f"Tipo '{query_type}' detectado por {method} (conf: {confidence:.2f}). "
+                f"Nivel de detalle: {detail_level}."
+            )
+            _debug = {
+                'method_used': method,
+                'embedding_classification': (emb_type, round(emb_conf, 3)),
+                'keyword_classification': (kw_type, round(kw_conf, 3)),
+            }
+
+        # --- 3. Optimal fragment count (always from config table) ---
         num_fragments = self._calculate_optimal_fragments(
-            query_type, 
-            detail_level, 
-            len(question)
+            query_type, detail_level, len(question)
         )
-        
-        # Generar razonamiento
-        reasoning = f"Tipo '{query_type}' detectado por {method} (conf: {confidence:.2f}). "
-        reasoning += f"Nivel de detalle: {detail_level}. "
-        reasoning += f"Fragmentos: {num_fragments}."
-        
+
         return {
             'query_type': query_type,
             'num_fragments': num_fragments,
@@ -363,11 +474,7 @@ class QueryAnalyzer:
             'detail_level': detail_level,
             'confidence': round(confidence, 3),
             'reasoning': reasoning,
-            '_debug': {
-                'embedding_classification': (emb_type, round(emb_conf, 3)),
-                'keyword_classification': (kw_type, round(kw_conf, 3)),
-                'method_used': method,
-            }
+            '_debug': _debug,
         }
 
 

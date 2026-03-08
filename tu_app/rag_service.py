@@ -771,6 +771,7 @@ class RAGService:
         top_k: int = 5,
         query_type: str = 'general',
         importance_weight: Optional[float] = None,
+        search_terms: Optional[List[str]] = None,
     ) -> List[dict]:
         """
         Semantic search over a Canvas module collection.
@@ -787,6 +788,7 @@ class RAGService:
                 top_k=top_k,
                 query_type=query_type,
                 importance_weight=importance_weight,
+                search_terms=search_terms,
             )
             debug_service.log_rag_search(query, module_id, len(results))
             return results
