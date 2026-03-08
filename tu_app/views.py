@@ -694,6 +694,7 @@ def chat_api(request):
                 _user_prompt = f"Contexto del curso:\n{context_text}\n\nPregunta del estudiante:\n{question}\n\nPor favor, responde basándote en el contexto proporcionado."
                 capture_prompt_flow({
                     'question': question,
+                    'query_analysis': query_analysis,
                     'query_type': query_type,
                     'optimal_fragments': optimal_fragments,
                     'context_count': context_count,

@@ -80,7 +80,19 @@ pre.code-block{background:#12141c;border:1px solid var(--border);border-radius:6
     </div>
 </div>
 
-<!-- Row 3: Prompts & Response -->
+<!-- Row 3: Query Analysis -->
+<div class="grid">
+    <div class="card">
+        <h2>🤖 Análisis IA</h2>
+        <div id="qa-ai"><div class="empty">Sin datos</div></div>
+    </div>
+    <div class="card">
+        <h2>🧮 Análisis Embeddings / Keywords</h2>
+        <div id="qa-emb"><div class="empty">Sin datos</div></div>
+    </div>
+</div>
+
+<!-- Row 4: Prompts & Response -->
 <div class="grid">
     <div class="card full">
         <div class="tabs">
@@ -247,6 +259,46 @@ async function fetchFlow() {
         if (d.answer) {
             document.getElementById('response-text').textContent = d.answer;
         }
+
+        // Query analysis cards
+        const qa = d.query_analysis || {};
+        const dbg = qa._debug || {};
+
+        // AI card
+        if (dbg.ai_result) {
+            const ai = dbg.ai_result;
+            document.getElementById('qa-ai').innerHTML = `
+                <div class="kv"><div class="kv-item"><div class="label">Backend</div><div class="value">${esc(dbg.ai_backend || '-')}</div></div></div>
+                <div class="kv">
+                    <div class="kv-item"><div class="label">Tipo</div><div class="value">${esc(ai.query_type || '-')}</div></div>
+                    <div class="kv-item"><div class="label">Confianza</div><div class="value">${ai.confidence ?? '-'}</div></div>
+                    <div class="kv-item"><div class="label">Detalle</div><div class="value">${esc(ai.detail_level || '-')}</div></div>
+                </div>
+                <div class="kv"><div class="kv-item"><div class="label">Search Terms</div><div class="value" style="font-size:.9rem">${ai.search_terms ? ai.search_terms.map(t => '<span class="badge badge-blue" style="margin:2px">'+esc(t)+'</span>').join(' ') : '-'}</div></div></div>
+                <div class="kv"><div class="kv-item"><div class="label">Reasoning</div><div class="value" style="font-size:.85rem;font-weight:400">${esc(ai.reasoning || '-')}</div></div></div>
+            `;
+        } else {
+            document.getElementById('qa-ai').innerHTML = '<div class="empty">IA no disponible — usando fallback</div>';
+        }
+
+        // Embedding/Keyword card
+        const emb = dbg.embedding_classification || {};
+        const kw = dbg.keyword_classification || {};
+        document.getElementById('qa-emb').innerHTML = `
+            <div class="kv">
+                <div class="kv-item"><div class="label">Embeddings → Tipo</div><div class="value">${esc(emb.type || '-')}</div></div>
+                <div class="kv-item"><div class="label">Confianza</div><div class="value">${emb.confidence ?? '-'}</div></div>
+            </div>
+            <div class="kv">
+                <div class="kv-item"><div class="label">Keywords → Tipo</div><div class="value">${esc(kw.type || '-')}</div></div>
+                <div class="kv-item"><div class="label">Confianza</div><div class="value">${kw.confidence ?? '-'}</div></div>
+            </div>
+            <div class="kv">
+                <div class="kv-item"><div class="label">Método elegido</div><div class="value"><span class="badge badge-green">${esc(dbg.method_used || '-')}</span></div></div>
+                <div class="kv-item"><div class="label">Detalle fallback</div><div class="value">${esc(dbg.fallback_detail_level || '-')}</div></div>
+            </div>
+            <div class="kv"><div class="kv-item"><div class="label">Search Terms (tokenizados)</div><div class="value" style="font-size:.9rem">${dbg.fallback_search_terms ? dbg.fallback_search_terms.map(t => '<span class="badge badge-yellow" style="margin:2px">'+esc(t)+'</span>').join(' ') : '-'}</div></div></div>
+        `;
 
         // Session metrics
         document.getElementById('session-metrics').innerHTML = `

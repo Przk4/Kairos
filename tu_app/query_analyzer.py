@@ -130,6 +130,7 @@ class QueryAnalyzer:
         self._initialized = False
         self._ai_client = None
         self._ai_available = None
+        self._ai_backend = None  # 'ollama' or 'deepseek'
     
     def _ensure_initialized(self):
         """Inicialización lazy de embeddings de ejemplos."""
@@ -225,23 +226,44 @@ class QueryAnalyzer:
     # ------------------------------------------------------------------
 
     def _get_ai_client(self):
-        """Lazy-initialise the DeepSeek client for query analysis."""
+        """Lazy-init: try Ollama (free, local) first, then DeepSeek."""
         if self._ai_available is False:
             return None
         if self._ai_client is not None:
             return self._ai_client
         try:
-            import openai
+            import openai as _openai
+
+            # --- 1. Try Ollama (local, no tokens) ---
+            ollama_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+            try:
+                import urllib.request
+                req = urllib.request.Request(f"{ollama_url}/api/tags", method='GET')
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    if resp.status == 200:
+                        self._ai_client = _openai.OpenAI(
+                            api_key='ollama',
+                            base_url=f"{ollama_url}/v1",
+                        )
+                        self._ai_backend = 'ollama'
+                        self._ai_available = True
+                        logger.info("QueryAnalyzer: using Ollama (local)")
+                        return self._ai_client
+            except Exception:
+                pass
+
+            # --- 2. Fallback: DeepSeek ---
             api_key = os.getenv('DEEPSEEK_API_KEY')
             if not api_key:
                 self._ai_available = False
                 return None
-            self._ai_client = openai.OpenAI(
+            self._ai_client = _openai.OpenAI(
                 api_key=api_key,
                 base_url="https://api.deepseek.com",
             )
+            self._ai_backend = 'deepseek'
             self._ai_available = True
-            logger.info("QueryAnalyzer: AI client initialised")
+            logger.info("QueryAnalyzer: using DeepSeek (remote)")
             return self._ai_client
         except Exception as e:
             logger.warning(f"QueryAnalyzer: AI client init failed: {e}")
@@ -263,25 +285,28 @@ class QueryAnalyzer:
                 'válido con esta estructura exacta:\n\n'
                 '{\n'
                 '  "query_type": "summary|definition|comparison|list|specific|explanation|general",\n'
-                '  "search_terms": ["concepto_clave_1", "concepto_clave_2"],\n'
+                '  "search_terms": ["término1", "término2"],\n'
                 '  "detail_level": "brief|normal|comprehensive",\n'
                 '  "confidence": 0.85,\n'
                 '  "reasoning": "Breve explicación"\n'
                 '}\n\n'
                 'Reglas para search_terms:\n'
-                '- Extrae 1-5 conceptos CLAVE que el estudiante busca entender\n'
+                '- Extrae SOLO palabras o frases que aparecen LITERALMENTE en la pregunta\n'
+                '- NO inventes sinónimos, traducciones ni términos relacionados\n'
+                '- Extrae 1-5 conceptos clave presentes en la pregunta\n'
                 '- El primer término debe ser el concepto principal\n'
-                '- Incluye sinónimos o términos técnicos relacionados si son relevantes\n'
                 '- NO incluyas stopwords, verbos genéricos ni palabras comunes\n'
-                '- Ejemplo: "qué es kaizen" → ["kaizen", "mejora continua"]\n'
-                '- Ejemplo: "diferencia entre ADN y ARN" → ["ADN", "ARN", "ácido nucleico"]\n'
-                '- Ejemplo: "cómo funciona la fotosíntesis" → ["fotosíntesis", "cloroplasto", "luz solar"]\n\n'
+                '- Ejemplo: "qué es kaizen" → ["kaizen"]\n'
+                '- Ejemplo: "diferencia entre ADN y ARN" → ["ADN", "ARN"]\n'
+                '- Ejemplo: "cómo funciona la fotosíntesis" → ["fotosíntesis"]\n\n'
                 f'Pregunta: {question}\n\n'
                 'JSON:'
             )
 
+            model = 'qwen2.5:1.5b' if self._ai_backend == 'ollama' else 'deepseek-chat'
+
             response = client.chat.completions.create(
-                model='deepseek-chat',
+                model=model,
                 messages=[{'role': 'user', 'content': prompt}],
                 max_tokens=200,
                 temperature=0.1,
@@ -310,8 +335,9 @@ class QueryAnalyzer:
             result['search_terms'] = [str(t) for t in result.get('search_terms', [])][:5]
             result.setdefault('reasoning', '')
 
+            result['_backend'] = self._ai_backend or 'unknown'
             logger.info(
-                f"QueryAnalyzer AI: type={result['query_type']}, "
+                f"QueryAnalyzer AI ({result['_backend']}): type={result['query_type']}, "
                 f"terms={result['search_terms']}, conf={result['confidence']}"
             )
             return result
@@ -415,6 +441,19 @@ class QueryAnalyzer:
         # --- 1. Primary: AI-based classification ---
         ai_result = self._classify_by_ai(question)
 
+        # --- Always run embedding+keyword analysis for debug ---
+        emb_type, emb_conf = self._classify_by_similarity(question)
+        kw_type, kw_conf = self._classify_by_keywords(question)
+        fallback_search_terms = self._extract_search_terms(question)
+        fallback_detail_level = self._detect_detail_level(question)
+
+        _debug = {
+            'embedding_classification': {'type': emb_type, 'confidence': round(emb_conf, 3)},
+            'keyword_classification': {'type': kw_type, 'confidence': round(kw_conf, 3)},
+            'fallback_search_terms': fallback_search_terms,
+            'fallback_detail_level': fallback_detail_level,
+        }
+
         if ai_result:
             query_type = ai_result['query_type']
             search_terms = ai_result['search_terms']
@@ -422,12 +461,17 @@ class QueryAnalyzer:
             confidence = ai_result['confidence']
             reasoning = ai_result.get('reasoning', '')
             method = 'ai'
-            _debug = {'method_used': 'ai', 'ai_result': ai_result}
+            _debug['method_used'] = 'ai'
+            _debug['ai_backend'] = ai_result.get('_backend', 'unknown')
+            _debug['ai_result'] = {
+                'query_type': ai_result['query_type'],
+                'search_terms': ai_result['search_terms'],
+                'detail_level': ai_result['detail_level'],
+                'confidence': ai_result['confidence'],
+                'reasoning': ai_result.get('reasoning', ''),
+            }
         else:
-            # --- 2. Fallback: embedding + keyword hybrid ---
-            emb_type, emb_conf = self._classify_by_similarity(question)
-            kw_type, kw_conf = self._classify_by_keywords(question)
-
+            # --- Fallback: embedding + keyword hybrid ---
             if kw_conf > 0.6:
                 query_type = kw_type
                 confidence = kw_conf
@@ -450,17 +494,13 @@ class QueryAnalyzer:
                 confidence = 0.3
                 method = 'default'
 
-            detail_level = self._detect_detail_level(question)
-            search_terms = self._extract_search_terms(question)
+            detail_level = fallback_detail_level
+            search_terms = fallback_search_terms
             reasoning = (
                 f"Tipo '{query_type}' detectado por {method} (conf: {confidence:.2f}). "
                 f"Nivel de detalle: {detail_level}."
             )
-            _debug = {
-                'method_used': method,
-                'embedding_classification': (emb_type, round(emb_conf, 3)),
-                'keyword_classification': (kw_type, round(kw_conf, 3)),
-            }
+            _debug['method_used'] = method
 
         # --- 3. Optimal fragment count (always from config table) ---
         num_fragments = self._calculate_optimal_fragments(
