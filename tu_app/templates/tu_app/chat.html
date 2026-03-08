@@ -144,6 +144,16 @@
             -moz-column-break-inside: avoid;
         }
 
+        /* Additional rules to force KaTeX not to split formulas across blocks */
+        .msg-text .katex-display, .msg-text .katex {
+            display: inline-block !important;
+            white-space: nowrap !important;
+            max-width: 100% !important;
+            overflow-x: auto !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+        }
+
         .message-time { font-size: 0.75em; color: #9ca3af; margin-top: 5px; padding: 0 5px; }
 
         .input-area { padding: 20px; background: #fff; border-top: 1px solid #e5e7eb; display: flex; gap: 10px; }
@@ -414,6 +424,18 @@
                 try { hljs.highlightElement(block); } catch (e) {}
             });
         }
+
+        // Ensure KaTeX rendered nodes are not split across lines/paragraphs
+        try {
+            el.querySelectorAll('.katex-display, .katex').forEach(k => {
+                k.style.display = 'inline-block';
+                k.style.whiteSpace = 'nowrap';
+                k.style.maxWidth = '100%';
+                k.style.overflowX = 'auto';
+                k.style.pageBreakInside = 'avoid';
+                k.style.breakInside = 'avoid';
+            });
+        } catch (e) { /* ignore */ }
     }
 
     // ===================================================================
