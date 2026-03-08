@@ -251,18 +251,41 @@ class VectorStore:
         chunk_size: int = 1000,
         overlap: int = 200,
     ) -> List[str]:
-        """Split *text* into overlapping fixed-size character windows."""
+        """Split *text* into overlapping windows, snapping at sentence or word boundaries."""
         if not text or not text.strip():
             return [text] if text else ['']
         if len(text) <= chunk_size:
             return [text]
         chunks, start = [], 0
         while start < len(text):
-            chunk = text[start:start + chunk_size]
-            if chunk.strip():
+            end = start + chunk_size
+            if end < len(text):
+                # Try to snap to the last sentence boundary within the window
+                snap = self._find_sentence_break(text, start, end)
+                if snap > start:
+                    end = snap
+                else:
+                    # Fall back to last whitespace
+                    space = text.rfind(' ', start, end)
+                    if space > start:
+                        end = space
+            chunk = text[start:end].strip()
+            if chunk:
                 chunks.append(chunk)
-            start += chunk_size - overlap
+            # Advance: avoid zero-progress
+            next_start = end - overlap
+            if next_start <= start:
+                next_start = start + max(1, chunk_size // 2)
+            start = next_start
         return chunks or [text]
+
+    @staticmethod
+    def _find_sentence_break(text: str, start: int, end: int) -> int:
+        """Return position after the last sentence-ending punctuation in text[start:end]."""
+        best = -1
+        for m in re.finditer(r'[.!?](?:\s|$)', text[start:end]):
+            best = start + m.end()
+        return best
 
     def chunk_semantic(
         self,
@@ -324,6 +347,17 @@ class VectorStore:
         # Only flush at breakpoints when the chunk has reached min_chunk_size.
         chunks, buf, buf_len = [], [], 0
         for i, seg in enumerate(segments):
+            # If a single segment exceeds max, sub-split it at sentence/word boundaries
+            if len(seg) > max_chunk_size:
+                # Flush whatever is in the buffer first
+                if buf:
+                    chunks.append('\n'.join(buf))
+                    buf, buf_len = [], 0
+                # Sub-split the oversized segment
+                for sub in self.chunk_sliding(seg, chunk_size=max_chunk_size, overlap=100):
+                    chunks.append(sub)
+                continue
+
             # Hard limit: flush if adding this segment exceeds max_chunk_size
             if buf_len + len(seg) > max_chunk_size and buf:
                 chunks.append('\n'.join(buf))
