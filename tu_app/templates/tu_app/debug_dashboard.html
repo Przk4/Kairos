@@ -1,0 +1,302 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kairos — Debug Dashboard</title>
+<style>
+:root{--bg:#0f1117;--card:#1a1d28;--border:#2a2d3a;--text:#e1e4eb;--dim:#8b8fa3;--accent:#6c5ce7;--green:#22c55e;--yellow:#eab308;--red:#ef4444;--blue:#3b82f6;--font:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;--mono:Consolas,'Fira Code','JetBrains Mono',monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);background:var(--bg);color:var(--text);line-height:1.5;padding:16px}
+h1{font-size:1.4rem;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+h2{font-size:1rem;font-weight:600;margin-bottom:8px;color:var(--accent)}
+.top-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px}
+.top-bar .status{font-size:.85rem;color:var(--dim)}
+.top-bar .status .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;background:var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px;margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;overflow:hidden}
+.card.full{grid-column:1/-1}
+.card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.75rem;font-weight:600}
+.badge-green{background:rgba(34,197,94,.15);color:var(--green)}
+.badge-yellow{background:rgba(234,179,8,.15);color:var(--yellow)}
+.badge-red{background:rgba(239,68,68,.15);color:var(--red)}
+.badge-blue{background:rgba(59,130,246,.15);color:var(--blue)}
+table{width:100%;border-collapse:collapse;font-size:.85rem}
+th,td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--border)}
+th{color:var(--dim);font-weight:500;font-size:.75rem;text-transform:uppercase;letter-spacing:.5px}
+td{vertical-align:top}
+.mono{font-family:var(--mono);font-size:.82rem}
+pre.code-block{background:#12141c;border:1px solid var(--border);border-radius:6px;padding:10px;font-family:var(--mono);font-size:.8rem;white-space:pre-wrap;word-break:break-word;max-height:400px;overflow-y:auto;line-height:1.6;color:#c8ccd4}
+.sim-bar{display:inline-block;height:6px;border-radius:3px;margin-right:6px;vertical-align:middle}
+.kv{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:6px}
+.kv-item{font-size:.85rem}
+.kv-item .label{color:var(--dim);font-size:.75rem;text-transform:uppercase;letter-spacing:.3px}
+.kv-item .value{font-weight:600;font-size:1.1rem}
+.log-row{font-size:.82rem;font-family:var(--mono)}
+.log-row.ERROR td{color:var(--red)}
+.log-row.WARNING td{color:var(--yellow)}
+.empty{color:var(--dim);font-style:italic;text-align:center;padding:32px 0}
+.btn{background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:.82rem;font-weight:500}
+.btn:hover{opacity:.85}
+.tabs{display:flex;gap:4px;margin-bottom:8px}
+.tab{padding:4px 12px;border-radius:6px 6px 0 0;font-size:.8rem;cursor:pointer;background:transparent;color:var(--dim);border:1px solid transparent;border-bottom:none}
+.tab.active{background:var(--card);color:var(--text);border-color:var(--border)}
+.tab-content{display:none}
+.tab-content.active{display:block}
+@media(max-width:600px){.grid{grid-template-columns:1fr}body{padding:8px}}
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+    <h1>🛠️ Kairos Debug Dashboard</h1>
+    <div class="status">
+        <span class="dot"></span> Auto-refresh cada 5s
+        &nbsp;|&nbsp; <button class="btn" onclick="refreshAll()">⟳ Refrescar ahora</button>
+        &nbsp; <button class="btn" style="background:var(--blue)" onclick="location.href='/'">← Volver</button>
+    </div>
+</div>
+
+<!-- Row 1: Stats -->
+<div class="grid">
+    <div class="card" id="stats-card">
+        <h2>📊 Embeddings por Módulo</h2>
+        <div id="modules-stats"><div class="empty">Cargando...</div></div>
+    </div>
+    <div class="card" id="info-card">
+        <h2>📋 Última Interacción</h2>
+        <div id="last-interaction"><div class="empty">Sin datos aún</div></div>
+    </div>
+</div>
+
+<!-- Row 2: Chunks -->
+<div class="grid">
+    <div class="card full">
+        <h2>🔍 Chunks Encontrados (mayor similitud → menor)</h2>
+        <div id="chunks-table"><div class="empty">Haz una pregunta en el chat para ver datos</div></div>
+    </div>
+</div>
+
+<!-- Row 3: Prompts & Response -->
+<div class="grid">
+    <div class="card full">
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab(event,'tab-system')">Perfil / System Prompt</div>
+            <div class="tab" onclick="switchTab(event,'tab-payload')">Payload completo a API</div>
+            <div class="tab" onclick="switchTab(event,'tab-response')">Respuesta DeepSeek</div>
+        </div>
+        <div id="tab-system" class="tab-content active">
+            <pre class="code-block" id="system-prompt-text">Sin datos</pre>
+        </div>
+        <div id="tab-payload" class="tab-content">
+            <pre class="code-block" id="payload-text">Sin datos</pre>
+        </div>
+        <div id="tab-response" class="tab-content">
+            <pre class="code-block" id="response-text">Sin datos</pre>
+        </div>
+    </div>
+</div>
+
+<!-- Row 4: Logs -->
+<div class="grid">
+    <div class="card full">
+        <div class="card-header">
+            <h2>📝 Log del sistema</h2>
+            <button class="btn" onclick="fetchLogs()">⟳</button>
+        </div>
+        <div id="logs-table"><div class="empty">Sin logs</div></div>
+    </div>
+</div>
+
+<!-- Row 5: Extra monitoring -->
+<div class="grid">
+    <div class="card">
+        <h2>⚙️ Configuración Activa</h2>
+        <div id="config-info" class="mono" style="font-size:.82rem">
+            <p><strong>Modelo IA:</strong> deepseek-chat</p>
+            <p><strong>Embedding:</strong> paraphrase-multilingual-MiniLM-L12-v2 (384 dims)</p>
+            <p><strong>Vector Store:</strong> ChromaDB (cosine)</p>
+            <p><strong>Temperatura:</strong> 0.7 &nbsp; <strong>top_p:</strong> 0.9</p>
+            <p><strong>Max tokens:</strong> 1000</p>
+        </div>
+    </div>
+    <div class="card">
+        <h2>📈 Métricas de Sesión</h2>
+        <div id="session-metrics"><div class="empty">Sin datos</div></div>
+    </div>
+</div>
+
+<script>
+const API = {
+    stats:  '/api/modules/stats-all/',
+    flow:   '/api/debug/prompt-flow/',
+    logs:   '/api/debug/logs/?limit=50',
+};
+
+// ── Tab switching ──
+function switchTab(e, tabId) {
+    e.target.closest('.tabs').querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    e.target.classList.add('active');
+    const card = e.target.closest('.card');
+    card.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    card.querySelector('#' + tabId).classList.add('active');
+}
+
+// ── Fetch helpers ──
+async function fetchJSON(url) {
+    const r = await fetch(url, {credentials:'same-origin'});
+    return r.json();
+}
+
+// ── 1. Module stats ──
+async function fetchStats() {
+    try {
+        const d = await fetchJSON(API.stats);
+        if (d.status !== 'ok') return;
+        let html = '<table><tr><th>Módulo</th><th>Embeddings</th><th>Estado</th></tr>';
+        d.modules.forEach(m => {
+            const badge = m.has_embeddings
+                ? `<span class="badge badge-green">✅ ${m.embeddings_count} vectores</span>`
+                : '<span class="badge badge-red">⚫ Sin vectores</span>';
+            html += `<tr><td>${esc(m.name)}</td><td class="mono">${m.embeddings_count}</td><td>${badge}</td></tr>`;
+        });
+        html += '</table>';
+        html += `<div class="kv" style="margin-top:8px">
+            <div class="kv-item"><div class="label">Total módulos</div><div class="value">${d.total_modules}</div></div>
+            <div class="kv-item"><div class="label">Total embeddings</div><div class="value">${d.total_embeddings}</div></div>
+            <div class="kv-item"><div class="label">ChromaDB</div><div class="value">${d.chromadb_active ? '🟢 Activo' : '🔴 Inactivo'}</div></div>
+        </div>`;
+        document.getElementById('modules-stats').innerHTML = html;
+    } catch(e) { console.error('stats:', e); }
+}
+
+// ── 2-6. Prompt flow ──
+let _questionsCount = 0;
+let _totalTokens = 0;
+let _totalTime = 0;
+let _lastQuestion = '';
+
+async function fetchFlow() {
+    try {
+        const d = await fetchJSON(API.flow);
+        if (d.status === 'empty') return;
+
+        // Avoid double-counting the same question
+        if (d.question && d.question !== _lastQuestion) {
+            _lastQuestion = d.question;
+            _questionsCount++;
+            _totalTokens += (d.tokens_used || 0);
+            _totalTime += (d.processing_time || 0);
+        }
+
+        // Last interaction card
+        document.getElementById('last-interaction').innerHTML = `
+            <div class="kv">
+                <div class="kv-item"><div class="label">Pregunta</div><div class="value" style="font-size:.9rem;max-width:320px;word-break:break-word">${esc(d.question || '-')}</div></div>
+            </div>
+            <div class="kv">
+                <div class="kv-item"><div class="label">Tipo query</div><div class="value">${esc(d.query_type || '-')}</div></div>
+                <div class="kv-item"><div class="label">Fragmentos pedidos</div><div class="value">${d.optimal_fragments || '-'}</div></div>
+                <div class="kv-item"><div class="label">Chunks encontrados</div><div class="value">${d.context_count || 0}</div></div>
+            </div>
+            <div class="kv">
+                <div class="kv-item"><div class="label">Tokens</div><div class="value">${d.tokens_used || 0}</div></div>
+                <div class="kv-item"><div class="label">Tiempo</div><div class="value">${d.processing_time || 0}s</div></div>
+                <div class="kv-item"><div class="label">Modelo</div><div class="value">${esc(d.model || '-')}</div></div>
+                <div class="kv-item"><div class="label">Usuario</div><div class="value">${esc(d.user || '-')}</div></div>
+            </div>
+            <div class="kv">
+                <div class="kv-item"><div class="label">Módulo ID</div><div class="value">${d.module_id ?? 'todos'}</div></div>
+                <div class="kv-item"><div class="label">Curso ID</div><div class="value">${d.course_id || '-'}</div></div>
+                <div class="kv-item"><div class="label">Capturado</div><div class="value" style="font-size:.8rem">${d.captured_at || '-'}</div></div>
+            </div>
+        `;
+
+        // Chunks table
+        if (d.chunks && d.chunks.length) {
+            let html = '<table><tr><th>#</th><th>Archivo / Título</th><th>Similitud</th><th>Preview</th></tr>';
+            d.chunks.forEach(c => {
+                const pct = (c.similarity * 100).toFixed(1);
+                const color = c.similarity > 0.7 ? 'var(--green)' : c.similarity > 0.4 ? 'var(--yellow)' : 'var(--red)';
+                const barW = Math.max(4, c.similarity * 120);
+                html += `<tr>
+                    <td class="mono">${c.rank}</td>
+                    <td><strong>${esc(c.title)}</strong></td>
+                    <td class="mono"><span class="sim-bar" style="width:${barW}px;background:${color}"></span>${pct}%</td>
+                    <td style="font-size:.8rem;max-width:400px;word-break:break-word">${esc(c.preview)}</td>
+                </tr>`;
+            });
+            html += '</table>';
+            document.getElementById('chunks-table').innerHTML = html;
+        }
+
+        // System prompt
+        if (d.system_prompt) {
+            document.getElementById('system-prompt-text').textContent = d.system_prompt;
+        }
+
+        // Full payload
+        if (d.full_messages) {
+            document.getElementById('payload-text').textContent = JSON.stringify(d.full_messages, null, 2);
+        }
+
+        // Response
+        if (d.answer) {
+            document.getElementById('response-text').textContent = d.answer;
+        }
+
+        // Session metrics
+        document.getElementById('session-metrics').innerHTML = `
+            <div class="kv">
+                <div class="kv-item"><div class="label">Preguntas (sesión)</div><div class="value">${_questionsCount}</div></div>
+                <div class="kv-item"><div class="label">Tokens totales</div><div class="value">${_totalTokens}</div></div>
+                <div class="kv-item"><div class="label">Tiempo acumulado</div><div class="value">${_totalTime.toFixed(1)}s</div></div>
+            </div>`;
+
+    } catch(e) { console.error('flow:', e); }
+}
+
+// ── 7. Logs ──
+async function fetchLogs() {
+    try {
+        const d = await fetchJSON(API.logs);
+        if (!d.logs || !d.logs.length) {
+            document.getElementById('logs-table').innerHTML = '<div class="empty">Sin logs</div>';
+            return;
+        }
+        let html = '<table><tr><th>Hora</th><th>Nivel</th><th>Mensaje</th><th>Detalle</th></tr>';
+        d.logs.forEach(l => {
+            const t = l.timestamp ? l.timestamp.split('T')[1]?.substring(0,8) : '';
+            const cls = l.level || '';
+            const badge = cls === 'ERROR' ? 'badge-red' : cls === 'WARNING' ? 'badge-yellow' : 'badge-blue';
+            html += `<tr class="log-row ${cls}">
+                <td class="mono">${t}</td>
+                <td><span class="badge ${badge}">${cls}</span></td>
+                <td>${esc(l.message)}</td>
+                <td style="font-size:.78rem;max-width:300px;word-break:break-word">${esc(l.extra || '')}</td>
+            </tr>`;
+        });
+        html += '</table>';
+        document.getElementById('logs-table').innerHTML = html;
+    } catch(e) { console.error('logs:', e); }
+}
+
+// ── Refresh all ──
+function refreshAll() {
+    fetchStats();
+    fetchFlow();
+    fetchLogs();
+}
+
+// ── Escape HTML ──
+function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+// ── Init ──
+refreshAll();
+setInterval(refreshAll, 5000);
+</script>
+</body>
+</html>

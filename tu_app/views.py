@@ -28,6 +28,7 @@ from .canvas_auth import (
 from .rag_service import get_rag_service
 from .ai_service import get_ai_service
 from .query_analyzer import get_query_analyzer
+from .debug_state import capture_prompt_flow, push_log
 
 logger = logging.getLogger(__name__)
 
@@ -683,7 +684,41 @@ def chat_api(request):
             answer = ai_response.get('answer', '')
 
             answer = _clean_ai_answer(answer)
-            
+
+            # ── Capture for debug dashboard ──
+            try:
+                from .ai_service_config import DeepSeekProvider
+                _sys_prompt = DeepSeekProvider.SYSTEM_PROMPT
+                _user_prompt = f"Contexto del curso:\n{context_text}\n\nPregunta del estudiante:\n{question}\n\nPor favor, responde basándote en el contexto proporcionado."
+                capture_prompt_flow({
+                    'question': question,
+                    'query_type': query_type,
+                    'optimal_fragments': optimal_fragments,
+                    'context_count': context_count,
+                    'chunks': [{
+                        'rank': e['rank'],
+                        'title': e['title'],
+                        'similarity': round(e['similarity'], 4),
+                        'preview': e['preview'],
+                    } for e in embeddings_info],
+                    'system_prompt': _sys_prompt,
+                    'user_prompt': _user_prompt,
+                    'full_messages': [
+                        {'role': 'system', 'content': _sys_prompt},
+                        {'role': 'user', 'content': _user_prompt},
+                    ],
+                    'answer': answer,
+                    'tokens_used': tokens,
+                    'processing_time': round(processing_time, 2),
+                    'model': ai_response.get('model', 'deepseek-chat'),
+                    'module_id': module.id if module else None,
+                    'course_id': int(course_id),
+                    'user': request.user.username,
+                })
+                push_log('INFO', f'Chat processed: {tokens} tokens, {processing_time:.2f}s', question[:80])
+            except Exception as _dbg_err:
+                logger.debug(f'Debug capture failed: {_dbg_err}')
+
             # Guardamos la respuesta de IA
             ai_message = ChatMessage.objects.create(
                 user=request.user,
@@ -707,6 +742,7 @@ def chat_api(request):
             })
         except Exception as e:
             logger.error(f"Error processing AI response for user {request.user.username}: {str(e)}")
+            push_log('ERROR', f'AI processing error: {e}', question[:80] if question else '')
             return JsonResponse({'error': f'Error en procesamiento de IA: {str(e)}'}, status=500)
         
     except Course.DoesNotExist:
@@ -1288,6 +1324,36 @@ def get_all_modules_stats(request):
     except Exception as e:
         logger.error(f"Error getting all modules stats: {e}")
         return JsonResponse({'error': str(e)}, status=500)
+
+
+# ============================================================================
+# DEBUG DASHBOARD
+# ============================================================================
+
+@login_required
+def debug_dashboard(request):
+    """Render the debug dashboard page."""
+    return render(request, 'tu_app/debug_dashboard.html')
+
+
+@login_required
+@require_http_methods(["GET"])
+def debug_api_prompt_flow(request):
+    """Return the last captured prompt-flow snapshot."""
+    from .debug_state import get_last_prompt_flow
+    data = get_last_prompt_flow()
+    if not data:
+        return JsonResponse({'status': 'empty', 'message': 'No hay datos aún. Haz una pregunta en el chat primero.'})
+    return JsonResponse({'status': 'ok', **data})
+
+
+@login_required
+@require_http_methods(["GET"])
+def debug_api_logs(request):
+    """Return recent log entries."""
+    from .debug_state import get_logs
+    limit = min(int(request.GET.get('limit', 100)), 200)
+    return JsonResponse({'status': 'ok', 'logs': get_logs(limit)})
 
 
 # ============================================================================

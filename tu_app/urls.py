@@ -31,4 +31,9 @@ urlpatterns = [
     
     # Module analysis status
     path('api/module/<int:module_id>/analysis-status/', views.check_module_analysis_status, name='check_analysis_status'),
+    
+    # Debug dashboard
+    path('debug/dashboard/', views.debug_dashboard, name='debug_dashboard'),
+    path('api/debug/prompt-flow/', views.debug_api_prompt_flow, name='debug_prompt_flow'),
+    path('api/debug/logs/', views.debug_api_logs, name='debug_logs'),
 ]
