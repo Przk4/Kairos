@@ -117,6 +117,36 @@ class QueryAnalyzer:
             r'\b(a fondo|exhaustivo|amplio)\b',
         ],
     }
+
+    # Bilingual term expansion: maps common academic terms to their
+    # translations so keyword_boost works across languages.
+    BILINGUAL_TERMS = {
+        'resumen': ['summary', 'overview', 'recap'],
+        'summary': ['resumen'],
+        'overview': ['resumen'],
+        'definición': ['definition'],
+        'definition': ['definición'],
+        'comparación': ['comparison'],
+        'comparison': ['comparación'],
+        'ejemplo': ['example'],
+        'example': ['ejemplo'],
+        'conclusión': ['conclusion'],
+        'conclusion': ['conclusión'],
+        'objetivo': ['objective', 'goal', 'aim'],
+        'objective': ['objetivo'],
+        'goal': ['objetivo', 'meta'],
+        'principio': ['principle'],
+        'principle': ['principio'],
+        'proceso': ['process'],
+        'process': ['proceso'],
+        'ventaja': ['advantage', 'benefit'],
+        'advantage': ['ventaja'],
+        'desventaja': ['disadvantage'],
+        'disadvantage': ['desventaja'],
+        'característica': ['characteristic', 'feature'],
+        'characteristic': ['característica'],
+        'todo': ['all', 'everything', 'overview'],
+    }
     
     def __init__(self, embedding_model=None):
         """
@@ -357,6 +387,17 @@ class QueryAnalyzer:
         
         return 'normal'
     
+    def _expand_bilingual(self, terms: List[str]) -> List[str]:
+        """Expand search terms with bilingual translations."""
+        expanded = list(terms)
+        seen = {t.lower() for t in terms}
+        for term in terms:
+            for translation in self.BILINGUAL_TERMS.get(term.lower(), []):
+                if translation.lower() not in seen:
+                    expanded.append(translation)
+                    seen.add(translation.lower())
+        return expanded
+
     def _extract_search_terms(self, question: str) -> List[str]:
         """
         Extrae términos clave para búsqueda expandida.
@@ -520,6 +561,9 @@ class QueryAnalyzer:
             summary_cfg = self.FRAGMENTS_CONFIG['summary']
             num_fragments = summary_cfg['max']  # 15
             importance_weight = 0.40
+
+        # --- 5. Expand search_terms with bilingual translations ---
+        search_terms = self._expand_bilingual(search_terms)
 
         ret = {
             'query_type': query_type,
