@@ -622,7 +622,8 @@ def chat_api(request):
                     question, module.id, course.id,
                     top_k=optimal_fragments,
                     query_type=query_type,
-                    search_terms=query_analysis.get('search_terms'),
+                        search_terms=query_analysis.get('search_terms'),
+                        importance_weight=query_analysis.get('importance_weight'),
                 )
                 logger.info(f"[CHAT] Searched module {module.id}: requested={optimal_fragments}, got={len(context)}")
             else:
@@ -635,6 +636,7 @@ def chat_api(request):
                         top_k=optimal_fragments,
                         query_type=query_type,
                         search_terms=query_analysis.get('search_terms'),
+                        importance_weight=query_analysis.get('importance_weight'),
                     )
                     context.extend(mod_context)
                 # Re-rank global: ordenar TODOS los resultados y quedarse con los mejores

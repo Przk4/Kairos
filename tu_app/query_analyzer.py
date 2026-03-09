@@ -437,6 +437,7 @@ class QueryAnalyzer:
             }
         
         question = question.strip()
+        question_lower = question.lower()
 
         # --- 1. Primary: AI-based classification ---
         ai_result = self._classify_by_ai(question)
@@ -507,7 +508,18 @@ class QueryAnalyzer:
             query_type, detail_level, len(question)
         )
 
-        return {
+        # --- 4. Special-case: 'todo' (e.g. "resume todo") ---
+        # If the user explicitly asks for "todo"/"todas"/"todo el contenido",
+        # prefer a comprehensive response: increase fragments (bounded by max)
+        # and suggest a higher importance weight for ranking.
+        importance_weight = None
+        if re.search(r'\btodo\b|\btodas?\b|\btodo el\b|\btodo el contenido\b|\btodo el tema\b', question_lower, re.IGNORECASE):
+            detail_level = 'comprehensive'
+            cfg = self.FRAGMENTS_CONFIG.get(query_type, self.FRAGMENTS_CONFIG['general'])
+            num_fragments = min(cfg['max'], num_fragments + 3)
+            importance_weight = 0.40
+
+        ret = {
             'query_type': query_type,
             'num_fragments': num_fragments,
             'search_terms': search_terms,
@@ -516,6 +528,9 @@ class QueryAnalyzer:
             'reasoning': reasoning,
             '_debug': _debug,
         }
+        if importance_weight is not None:
+            ret['importance_weight'] = importance_weight
+        return ret
 
 
 # Singleton para reutilizar
