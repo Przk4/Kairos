@@ -556,6 +556,7 @@
             fd.append('image', pendingImageFile);
             fetchOpts = {
                 method: 'POST',
+                credentials: 'same-origin',
                 headers: { 'X-CSRFToken': getCSRFToken() },
                 body: fd
             };
@@ -563,20 +564,36 @@
         } else {
             fetchOpts = {
                 method: 'POST',
+                credentials: 'same-origin',
                 headers: { 'X-CSRFToken': getCSRFToken(), 'Content-Type': 'application/json' },
                 body: JSON.stringify({ question, course_id: courseId, module_id: currentModuleId })
             };
         }
 
         fetch('/api/chat/', fetchOpts)
-        .then(r => r.json())
+        .then(async (r) => {
+            // Handle non-OK responses and avoid parsing HTML error pages as JSON
+            if (!r.ok) {
+                const text = await r.text().catch(() => '');
+                try {
+                    return JSON.parse(text);
+                } catch (e) {
+                    throw new Error(`Error del servidor (${r.status})`);
+                }
+            }
+            try {
+                return await r.json();
+            } catch (e) {
+                throw new Error('Respuesta inválida del servidor');
+            }
+        })
         .then(data => {
             document.getElementById('typingIndicator').style.display = 'none';
-            if (data.success) {
+            if (data && data.success) {
                 addMessageToChat(data.response, 'ai');
                 console.log(`Tokens: ${data.tokens_used}, Tiempo: ${data.processing_time}s`);
             } else {
-                addMessageToChat(`Error: ${data.error || 'Error desconocido'}`, 'ai');
+                addMessageToChat(`Error: ${data && data.error ? data.error : 'Error desconocido'}`, 'ai');
             }
         })
         .catch(error => {
