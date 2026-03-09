@@ -516,8 +516,10 @@ class QueryAnalyzer:
         if re.search(r'\btodo\b|\btodas?\b|\btodo el\b|\btodo el contenido\b|\btodo el tema\b', question_lower, re.IGNORECASE):
             detail_level = 'comprehensive'
             cfg = self.FRAGMENTS_CONFIG.get(query_type, self.FRAGMENTS_CONFIG['general'])
-            num_fragments = min(cfg['max'], num_fragments + 3)
-            importance_weight = 0.40
+            # Increase fragments aggressively for 'todo' requests
+            num_fragments = min(cfg['max'], num_fragments + 6)
+            # Increase importance weighting so important chunks surface
+            importance_weight = 0.50
 
         ret = {
             'query_type': query_type,
