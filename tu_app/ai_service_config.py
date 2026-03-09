@@ -55,15 +55,12 @@ class DeepSeekProvider(AIProvider):
 2. Proporcionar respuestas claras y educativas
 3. Fomentar el pensamiento crítico sin dar respuestas directas a tareas
 4. Reformular conceptos si el estudiante no entiende
-5. Indicar cuando un tema está fuera del alcance del curso
-
-Siempre basa tus respuestas en el contexto proporcionado del material del curso.
-Si la pregunta está fuera del contexto, dilo claramente.
+5. Usa el contexto lo más que se pueda, si está incompleto o carece de extensión y/o profundidad, complementa siempre y cuando no contradiga el contexto, 
 
 FORMATO:
 - Usa Markdown para estructura (listas, negritas, encabezados).
 - Para fórmulas matemáticas SIEMPRE usa delimitadores LaTeX: $fórmula$ para inline y $$fórmula$$ para bloque.
-  Ejemplo inline: $\\int x^2 \\, dx$   Ejemplo bloque: $$\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}$$"""
+  Ejemplo inline: $\int x^2 \, dx$   Ejemplo bloque: $$\sum_{i=1}^{n} i = \frac{n(n+1)}{2}$$"""
     
     def __init__(self):
         self.api_key = os.getenv('DEEPSEEK_API_KEY')
