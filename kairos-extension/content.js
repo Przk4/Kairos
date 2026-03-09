@@ -268,6 +268,11 @@
     .kairos-answer hr { border: none; border-top: 1px solid ${P.border}; margin: .8em 0; }
     .kairos-answer img { max-width: 100%; border-radius: 8px; margin: .4em 0; }
 
+    /* ── LaTeX math fallback (before KaTeX renders) ── */
+    .kairos-math { font-family: 'KaTeX_Main','Times New Roman',serif; }
+    .kairos-math[data-display="true"] { display: block; text-align: center; margin: .8em 0; font-size: 1.1em; overflow-x: auto; }
+    .kairos-answer .katex-display { overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+
     /* ── Screenshot capture overlay ── */
     .kairos-capture-overlay {
       position: fixed;
@@ -417,18 +422,21 @@
 
         window.kairosRenderLatex = function(){
           try{
-            if(!window.__kairos_katex_ready) return;
+            if(!window.__kairos_katex_ready || !window.renderMathInElement) return false;
             const host = document.getElementById('kairos-ext-root');
-            if(!host || !host.shadowRoot) return;
-            // Use auto-render to find $...$ and $$...$$ delimiters
-            renderMathInElement(host.shadowRoot, {
+            if(!host || !host.shadowRoot) return false;
+            const answer = host.shadowRoot.querySelector('.kairos-answer');
+            if(!answer) return false;
+            renderMathInElement(answer, {
               delimiters: [
                 {left: '$$', right: '$$', display: true},
                 {left: '$', right: '$', display: false}
               ],
-              ignoredTags: ['script','noscript','style','textarea','pre']
+              ignoredTags: ['script','noscript','style','textarea','pre','code'],
+              throwOnError: false
             });
-          }catch(err){console.warn('[Kairos] renderLatex error', err)}
+            return true;
+          }catch(err){console.warn('[Kairos] renderLatex error', err); return false;}
         };
 
         window.addEventListener('kairos-render-latex', ()=>{ window.kairosRenderLatex && window.kairosRenderLatex(); });
@@ -588,8 +596,12 @@
 
       if (res && res.success) {
         answerEl.innerHTML = miniMarkdown(res.response || res.answer || '');
-        // Trigger KaTeX rendering in the page script (it will render math in the shadow root)
-        try{ window.dispatchEvent(new Event('kairos-render-latex')); }catch(e){}
+        // Trigger KaTeX rendering with retry (CDN loads async)
+        function triggerLatex(){ try{ window.dispatchEvent(new Event('kairos-render-latex')); }catch(e){} }
+        triggerLatex();
+        setTimeout(triggerLatex, 300);
+        setTimeout(triggerLatex, 800);
+        setTimeout(triggerLatex, 2000);
         responseEl.style.display = 'block';
       } else {
         const msg = (res && res.message) || 'Error desconocido';
@@ -765,6 +777,21 @@
     if (!text) return '';
     let html = text;
 
+    // ── Protect LaTeX from markdown processing ──
+    const mathBlocks = [];
+    // Display math $$...$$ (must come before inline $...$)
+    html = html.replace(/\$\$([\s\S]*?)\$\$/g, (_, formula) => {
+      const idx = mathBlocks.length;
+      mathBlocks.push({ formula, display: true });
+      return `%%KMATH${idx}%%`;
+    });
+    // Inline math $...$ (no newlines inside)
+    html = html.replace(/(?<!\$)\$(?!\$)([^\$\n]+?)\$(?!\$)/g, (_, formula) => {
+      const idx = mathBlocks.length;
+      mathBlocks.push({ formula, display: false });
+      return `%%KMATH${idx}%%`;
+    });
+
     // Escape HTML entities first (then selectively unescape our markdown)
     html = escapeHtml(html);
 
@@ -842,6 +869,17 @@
     if (!html.startsWith('<h') && !html.startsWith('<ul') && !html.startsWith('<ol') && !html.startsWith('<pre') && !html.startsWith('<div') && !html.startsWith('<table')) {
       html = '<p>' + html + '</p>';
     }
+
+    // ── Restore LaTeX blocks (safe for innerHTML, KaTeX auto-render finds $$ delimiters) ──
+    mathBlocks.forEach((block, i) => {
+      const ph = `%%KMATH${i}%%`;
+      const safeFormula = escapeHtml(block.formula);
+      if (block.display) {
+        html = html.replace(ph, `<div class="kairos-math" data-display="true">$$${safeFormula}$$</div>`);
+      } else {
+        html = html.replace(ph, `<span class="kairos-math">$${safeFormula}$</span>`);
+      }
+    });
 
     return html;
   }
