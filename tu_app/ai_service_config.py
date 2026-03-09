@@ -86,7 +86,7 @@ FORMATO:
         self,
         question: str,
         context: List[dict],
-        max_tokens: int = 1000
+        max_tokens: int = 8000
     ) -> dict:
         try:
             context_text = self._format_context(context)

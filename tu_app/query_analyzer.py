@@ -509,17 +509,17 @@ class QueryAnalyzer:
         )
 
         # --- 4. Special-case: 'todo' (e.g. "resume todo") ---
-        # If the user explicitly asks for "todo"/"todas"/"todo el contenido",
-        # prefer a comprehensive response: increase fragments (bounded by max)
-        # and suggest a higher importance weight for ranking.
+        # When the user says "todo", they want comprehensive coverage:
+        # override detail_level, use summary-sized fragment limits, and
+        # boost importance weight.
         importance_weight = None
         if re.search(r'\btodo\b|\btodas?\b|\btodo el\b|\btodo el contenido\b|\btodo el tema\b', question_lower, re.IGNORECASE):
             detail_level = 'comprehensive'
-            cfg = self.FRAGMENTS_CONFIG.get(query_type, self.FRAGMENTS_CONFIG['general'])
-            # Increase fragments aggressively for 'todo' requests
-            num_fragments = min(cfg['max'], num_fragments + 6)
-            # Increase importance weighting so important chunks surface
-            importance_weight = 0.50
+            # Always use the summary config (max=15) so we're not capped by
+            # a narrow query_type like 'definition' (max=5)
+            summary_cfg = self.FRAGMENTS_CONFIG['summary']
+            num_fragments = summary_cfg['max']  # 15
+            importance_weight = 0.40
 
         ret = {
             'query_type': query_type,
