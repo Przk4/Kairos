@@ -110,8 +110,6 @@ Por favor, responde basándote en el contexto proporcionado."""
             
             start_time = time.time()
             
-            # Note: some providers have hard caps; we set a high limit here
-            # to avoid truncation of long structured answers requested by users.
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
