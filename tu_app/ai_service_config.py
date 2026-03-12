@@ -269,7 +269,7 @@ class OllamaProvider(AIProvider):
     def __init__(self):
         self.base_url = os.getenv('OLLAMA_BASE_URL', 'http://127.0.0.1:11434')
         self.model = os.getenv('OLLAMA_CHAT_MODEL', 'qwen2.5:1.5b')
-        self.timeout_seconds = int(os.getenv('OLLAMA_CHAT_TIMEOUT', '40'))
+        self.timeout_seconds = int(os.getenv('OLLAMA_CHAT_TIMEOUT', '20'))
         logger.info(f"✅ Ollama Provider inicializado ({self.model})")
 
     def answer_question(

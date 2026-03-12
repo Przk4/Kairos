@@ -92,6 +92,9 @@ class QueryAnalyzer:
     def __init__(self):
         self._ai_client = None
         self._ai_available = None
+        self._ollama_model = os.getenv('OLLAMA_ANALYZER_MODEL', 'qwen2.5:1.5b')
+        self._connect_timeout = float(os.getenv('OLLAMA_CONNECT_TIMEOUT', '2.0'))
+        self._request_timeout = float(os.getenv('OLLAMA_ANALYZER_TIMEOUT', '2.5'))
 
     # ------------------------------------------------------------------
     # Keyword-only classification (no embeddings, no AI call)
@@ -123,15 +126,16 @@ class QueryAnalyzer:
         if self._ai_client is not None:
             return self._ai_client
         try:
-            import openai as _openai
             ollama_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
             import urllib.request
             req = urllib.request.Request(f"{ollama_url}/api/tags", method='GET')
-            with urllib.request.urlopen(req, timeout=2) as resp:
+            with urllib.request.urlopen(req, timeout=self._connect_timeout) as resp:
                 if resp.status == 200:
+                    import openai as _openai
                     self._ai_client = _openai.OpenAI(
                         api_key='ollama',
                         base_url=f"{ollama_url}/v1",
+                        timeout=self._request_timeout,
                     )
                     self._ai_available = True
                     logger.info("QueryAnalyzer: using Ollama (local, lightweight)")
@@ -168,7 +172,7 @@ class QueryAnalyzer:
             )
 
             response = client.chat.completions.create(
-                model='qwen2.5:1.5b',
+                model=self._ollama_model,
                 messages=[{'role': 'user', 'content': prompt}],
                 max_tokens=150,
                 temperature=0.1,
