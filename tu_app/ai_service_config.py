@@ -258,7 +258,99 @@ Respuesta:"""
 
 
 # ============================================================================
-# OPCIÓN 3: MOCK/DEMO (Sin API - Solo para testing rápido)
+# OPCIÓN 3: OLLAMA LOCAL (Ligero y rápido)
+# ============================================================================
+
+class OllamaProvider(AIProvider):
+    """Proveedor Ollama local - rápido, sin costo por token"""
+
+    SYSTEM_PROMPT = DeepSeekProvider.SYSTEM_PROMPT
+
+    def __init__(self):
+        self.base_url = os.getenv('OLLAMA_BASE_URL', 'http://127.0.0.1:11434')
+        self.model = os.getenv('OLLAMA_CHAT_MODEL', 'qwen2.5:1.5b')
+        self.timeout_seconds = int(os.getenv('OLLAMA_CHAT_TIMEOUT', '40'))
+        logger.info(f"✅ Ollama Provider inicializado ({self.model})")
+
+    def answer_question(
+        self,
+        question: str,
+        context: List[dict],
+        max_tokens: int = 1200
+    ) -> dict:
+        try:
+            import requests
+
+            context_text = self._format_context(context)
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": self.SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": f"""Contexto del curso:
+{context_text}
+
+Pregunta del estudiante:
+{question}
+
+Por favor, responde basándote en el contexto proporcionado."""
+                    },
+                ],
+                "max_tokens": max_tokens,
+                "temperature": 0.4,
+                "top_p": 0.9,
+            }
+
+            start_time = time.time()
+            response = requests.post(
+                f"{self.base_url.rstrip('/')}/v1/chat/completions",
+                json=payload,
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+            elapsed_time = time.time() - start_time
+
+            data = response.json()
+            answer = data['choices'][0]['message']['content']
+            usage = data.get('usage') or {}
+            tokens_used = usage.get('total_tokens', len(answer.split()))
+
+            return {
+                'answer': answer,
+                'tokens_used': tokens_used,
+                'processing_time': elapsed_time,
+                'model': self.model,
+                'context_used': len(context),
+            }
+
+        except Exception as e:
+            logger.error(f"Ollama error: {e}")
+            return {
+                'answer': f"Error en Ollama: {str(e)}",
+                'tokens_used': 0,
+                'processing_time': 0,
+                'model': self.model,
+                'context_used': len(context),
+            }
+
+    def _format_context(self, context: List[dict]) -> str:
+        """Formatea contexto en texto compacto para reducir latencia."""
+        if not context:
+            return "No hay contexto disponible."
+
+        lines = []
+        for i, doc in enumerate(context, 1):
+            content = doc.get('content', '')
+            metadata = doc.get('metadata', {})
+            title = metadata.get('item_title', 'Sin título')
+            lines.append(f"[{i}] {title}\n{content}\n")
+
+        return "\n".join(lines)
+
+
+# ============================================================================
+# OPCIÓN 4: MOCK/DEMO (Sin API - Solo para testing rápido)
 # ============================================================================
 
 class MockAIProvider(AIProvider):
@@ -333,13 +425,14 @@ Basándome en el material disponible: {self._extract_summary(context)}
 # CONFIGURACIÓN
 # ============================================================================
 
-# 👇 CAMBIAR AQUÍ PARA USAR UN PROVEEDOR DIFERENTE 👇
-ACTIVE_PROVIDER = "deepseek"  # Opciones: "deepseek", "huggingface", "mock"
+# 👇 CAMBIAR AQUÍ O POR ENV VAR KAIROS_AI_PROVIDER 👇
+ACTIVE_PROVIDER = os.getenv("KAIROS_AI_PROVIDER", "ollama").strip().lower()
 
 # Explicación:
 # "mock" = Responde sin API (perfect para testing hoy)
 # "huggingface" = Gratis con API key (huggingface.co)
-# "deepseek" = Producción (cuando tengas dinero)
+# "deepseek" = Producción (API externa)
+# "ollama" = Local, ligero y rápido
 
 # Después de cambiar, usa:
 #   ai = get_ai_service()

@@ -522,7 +522,19 @@ def chat_api(request):
     Supports JSON body or multipart/form-data (for image uploads).
     """
     try:
+        request_start = time.time()
+        timings = {
+            'parse_s': 0.0,
+            'ocr_s': 0.0,
+            'analysis_s': 0.0,
+            'search_s': 0.0,
+            'ai_s': 0.0,
+            'db_s': 0.0,
+            'total_s': 0.0,
+        }
+
         # Parse request — support both JSON and multipart
+        parse_start = time.time()
         image_bytes = None
         image_ocr_text = None
         content_type = request.content_type or ''
@@ -547,10 +559,12 @@ def chat_api(request):
                 if ',' in b64_image and b64_image.startswith('data:'):
                     b64_image = b64_image.split(',', 1)[1]
                 image_bytes = _b64.b64decode(b64_image)
+        timings['parse_s'] = round(time.time() - parse_start, 3)
 
         # OCR the image if present
         ocr_error = None
         if image_bytes:
+            ocr_start = time.time()
             try:
                 from .ocr_service import get_ocr_service
                 ocr = get_ocr_service()
@@ -559,6 +573,8 @@ def chat_api(request):
             except Exception as e:
                 ocr_error = str(e)
                 logger.error(f"[CHAT] Image OCR failed: {e}", exc_info=True)
+            finally:
+                timings['ocr_s'] = round(time.time() - ocr_start, 3)
 
         # Combine question with OCR text
         if image_ocr_text:
@@ -609,14 +625,17 @@ def chat_api(request):
             rag_service = get_rag_service()
             
             # NUEVO: Analizar pregunta para optimizar búsqueda
+            analysis_start = time.time()
             query_analyzer = get_query_analyzer(rag_service.embedding_model)
             query_analysis = query_analyzer.analyze(question)
+            timings['analysis_s'] = round(time.time() - analysis_start, 3)
             
             # Usar número de fragmentos dinámico basado en análisis
             optimal_fragments = query_analysis['num_fragments']
             query_type = query_analysis['query_type']
             
             # Si no hay módulo específico, buscamos en todos
+            search_start = time.time()
             if module:
                 context = rag_service.search_context(
                     question, module.id, course.id,
@@ -643,6 +662,7 @@ def chat_api(request):
                 context.sort(key=lambda x: x.get('combined_score', 0), reverse=True)
                 context = context[:optimal_fragments]
                 logger.info(f"[CHAT] Searched {course.modules.count()} modules: global re-rank top {optimal_fragments} from {len(context)} candidates")
+            timings['search_s'] = round(time.time() - search_start, 3)
             
             # Extraer información de embeddings para debug
             embeddings_info = []
@@ -684,6 +704,7 @@ def chat_api(request):
             )
             
             processing_time = time.time() - start_time
+            timings['ai_s'] = round(processing_time, 3)
             tokens = ai_response.get('tokens_used', 0)
             answer = ai_response.get('answer', '')
 
@@ -725,6 +746,7 @@ def chat_api(request):
                 logger.debug(f'Debug capture failed: {_dbg_err}')
 
             # Guardamos la respuesta de IA
+            db_start = time.time()
             ai_message = ChatMessage.objects.create(
                 user=request.user,
                 course=course,
@@ -733,16 +755,31 @@ def chat_api(request):
                 content=answer,
                 tokens_used=tokens,
                 processing_time=processing_time,
-                model_used='deepseek'
+                model_used=ai_response.get('model', 'unknown')
             )
+            timings['db_s'] = round(time.time() - db_start, 3)
+            timings['total_s'] = round(time.time() - request_start, 3)
             
-            logger.info(f"Chat processed for user {request.user.username} - {tokens} tokens, {processing_time:.2f}s")
+            logger.info(
+                "Chat processed for user %s - %s tokens, total=%ss (parse=%ss, ocr=%ss, analysis=%ss, search=%ss, ai=%ss, db=%ss)",
+                request.user.username,
+                tokens,
+                timings['total_s'],
+                timings['parse_s'],
+                timings['ocr_s'],
+                timings['analysis_s'],
+                timings['search_s'],
+                timings['ai_s'],
+                timings['db_s'],
+            )
             
             return JsonResponse({
                 'success': True,
                 'response': answer,
                 'tokens_used': tokens,
                 'processing_time': f'{processing_time:.2f}',
+                'timings': timings,
+                'model_used': ai_response.get('model', 'unknown'),
                 'message_id': ai_message.id
             })
         except Exception as e:

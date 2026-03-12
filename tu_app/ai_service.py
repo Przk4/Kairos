@@ -8,6 +8,7 @@ from tu_app.ai_service_config import (
     MockAIProvider,
     DeepSeekProvider,
     HuggingFaceProvider,
+    OllamaProvider,
 )
 from tu_app.debug_service import get_debug_service
 
@@ -47,6 +48,9 @@ class DeepSeekAIService:
             except ValueError:
                 logger.warning("Hugging Face not available, falling back to Mock")
                 self.provider = MockAIProvider()
+
+        elif provider_name == "ollama":
+            self.provider = OllamaProvider()
         
         else:
             # Default to Mock
