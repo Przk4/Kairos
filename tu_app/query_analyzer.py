@@ -92,6 +92,7 @@ class QueryAnalyzer:
     def __init__(self):
         self._ai_client = None
         self._ai_available = None
+        self._ai_terms_enabled = os.getenv('KAIROS_ANALYZER_AI_TERMS', '0').strip().lower() in {'1', 'true', 'yes', 'on'}
         self._ollama_model = os.getenv('OLLAMA_ANALYZER_MODEL', 'qwen2.5:1.5b')
         self._connect_timeout = float(os.getenv('OLLAMA_CONNECT_TIMEOUT', '2.0'))
         self._request_timeout = float(os.getenv('OLLAMA_ANALYZER_TIMEOUT', '2.5'))
@@ -165,24 +166,31 @@ class QueryAnalyzer:
                 'JSON:'
             )
 
-            import concurrent.futures
+            import threading
+
+            result_box: list = [None]
 
             def _call():
-                resp = client.chat.completions.create(
-                    model=self._ollama_model,
-                    messages=[{'role': 'user', 'content': prompt}],
-                    max_tokens=40,
-                    temperature=0.1,
-                )
-                return resp.choices[0].message.content.strip()
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                future = ex.submit(_call)
                 try:
-                    text = future.result(timeout=self._request_timeout)
-                except concurrent.futures.TimeoutError:
-                    logger.warning("QueryAnalyzer AI term extraction timed out")
-                    return None
+                    resp = client.chat.completions.create(
+                        model=self._ollama_model,
+                        messages=[{'role': 'user', 'content': prompt}],
+                        max_tokens=40,
+                        temperature=0.1,
+                    )
+                    result_box[0] = resp.choices[0].message.content.strip()
+                except Exception:
+                    pass
+
+            t = threading.Thread(target=_call, daemon=True)
+            t.start()
+            t.join(timeout=self._request_timeout)
+            if t.is_alive():
+                logger.warning("QueryAnalyzer AI term extraction timed out")
+                return None
+            text = result_box[0]
+            if text is None:
+                return None
 
             # Strip markdown fences
             if text.startswith('```'):
@@ -290,7 +298,7 @@ class QueryAnalyzer:
         detail_level = self._detect_detail_level(question)
 
         # --- 2. Extract terms: try Ollama first, fallback to regex ---
-        ai_terms = self._extract_terms_ai(question)
+        ai_terms = self._extract_terms_ai(question) if self._ai_terms_enabled else None
         if ai_terms:
             search_terms = ai_terms
             method = 'ollama'
