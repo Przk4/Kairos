@@ -158,27 +158,32 @@ class QueryAnalyzer:
             return None
         try:
             prompt = (
-                'De la siguiente pregunta de estudiante, extrae los conceptos clave '
-                'y genera sinónimos o términos equivalentes para cada uno.\n\n'
-                'Devuelve SOLO un JSON array con todos los términos (originales + equivalentes).\n'
-                'Máximo 10 términos en total. Sin stopwords ni verbos genéricos.\n\n'
-                'Ejemplos:\n'
-                '- "qué es kaizen" → ["kaizen", "mejora continua", "continuous improvement"]\n'
-                '- "diferencia entre ADN y ARN" → ["ADN", "ARN", "DNA", "RNA", "ácido desoxirribonucleico", "ácido ribonucleico"]\n'
-                '- "cómo funciona la fotosíntesis" → ["fotosíntesis", "photosynthesis", "cloroplasto", "chloroplast", "luz solar"]\n'
-                '- "resume el tema de derivadas" → ["derivadas", "derivatives", "diferenciación", "differentiation", "tasa de cambio"]\n\n'
-                f'Pregunta: {question}\n\n'
-                'JSON array:'
+                'De la siguiente pregunta extrae los conceptos clave como JSON array.\n'
+                'Máximo 6 términos. Solo sustantivos/conceptos clave, sin stopwords.\n'
+                'Responde SOLO el array JSON, sin texto adicional.\n'
+                f'Pregunta: {question}\n'
+                'JSON:'
             )
 
-            response = client.chat.completions.create(
-                model=self._ollama_model,
-                messages=[{'role': 'user', 'content': prompt}],
-                max_tokens=150,
-                temperature=0.1,
-            )
+            import concurrent.futures
 
-            text = response.choices[0].message.content.strip()
+            def _call():
+                resp = client.chat.completions.create(
+                    model=self._ollama_model,
+                    messages=[{'role': 'user', 'content': prompt}],
+                    max_tokens=40,
+                    temperature=0.1,
+                )
+                return resp.choices[0].message.content.strip()
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(_call)
+                try:
+                    text = future.result(timeout=self._request_timeout)
+                except concurrent.futures.TimeoutError:
+                    logger.warning("QueryAnalyzer AI term extraction timed out")
+                    return None
+
             # Strip markdown fences
             if text.startswith('```'):
                 text = re.sub(r'^```(?:json)?\s*', '', text)
