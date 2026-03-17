@@ -172,28 +172,29 @@ FORMATO:
                 'context_used': len(context),
             }
 
+    _MAX_CHARS_PER_CHUNK = 600
+
     def _format_context(self, context: List[dict]) -> str:
         """Formatea el contexto para enviar a DeepSeek"""
         if not context:
             return "No hay contexto disponible."
-        
+
         lines = []
         for i, doc in enumerate(context, 1):
-            content = doc.get('content', '')  # ENVIAMOS TODO EL CONTENIDO DEL CHUNK
+            raw_content = doc.get('content', '')
+            # Cap por chunk para limitar tokens de entrada
+            content = raw_content[:self._MAX_CHARS_PER_CHUNK]
+            if len(raw_content) > self._MAX_CHARS_PER_CHUNK:
+                content += '…'
             metadata = doc.get('metadata', {})
             title = metadata.get('item_title', 'Sin título')
             chunk_idx = metadata.get('chunk_index', '0')
-            chunk_total = metadata.get('chunk_total', '1')
             relevance = doc.get('relevance_score', 0)
-            
-            # Formato mejorado con información del chunk
-            lines.append(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            lines.append(f"📄 [{i}] {title} (Chunk {chunk_idx}/{chunk_total})")
-            lines.append(f"🎯 Relevancia: {relevance:.3f}")
-            lines.append(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            lines.append(f"{content}")
+
+            lines.append(f"--- [{i}] {title} (chunk {chunk_idx}, rel {relevance:.2f}) ---")
+            lines.append(content)
             lines.append("")
-        
+
         return "\n".join(lines)
 
 

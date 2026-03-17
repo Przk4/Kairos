@@ -718,14 +718,19 @@ def chat_api(request):
                     else:
                         context_text = str(context)
             
+            # Tokens adaptativos: brief→500, comprehensive→1000, normal→700
+            _detail = query_analysis.get('detail_level', 'normal')
+            _adaptive_max_tokens = 500 if _detail == 'brief' else (1000 if _detail == 'comprehensive' else 700)
+
             # Obtenemos respuesta de DeepSeek
             ai_service = get_ai_service()
             start_time = time.time()
-            
+
             ai_response = ai_service.answer_question(
                 question=analysis_question,
                 context=context,
                 user=request.user,
+                max_tokens=_adaptive_max_tokens,
                 question_metadata=ai_question_metadata,
             )
             

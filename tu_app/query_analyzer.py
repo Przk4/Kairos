@@ -19,13 +19,13 @@ class QueryAnalyzer:
 
     # Configuración de fragmentos por tipo
     FRAGMENTS_CONFIG = {
-        'summary': {'min': 8, 'max': 15, 'default': 10},
-        'definition': {'min': 2, 'max': 5, 'default': 3},
-        'comparison': {'min': 4, 'max': 8, 'default': 6},
-        'list': {'min': 5, 'max': 12, 'default': 8},
+        'summary': {'min': 5, 'max': 10, 'default': 7},
+        'definition': {'min': 2, 'max': 4, 'default': 3},
+        'comparison': {'min': 3, 'max': 6, 'default': 5},
+        'list': {'min': 4, 'max': 8, 'default': 6},
         'specific': {'min': 2, 'max': 4, 'default': 3},
-        'explanation': {'min': 4, 'max': 8, 'default': 5},
-        'general': {'min': 3, 'max': 7, 'default': 5},
+        'explanation': {'min': 3, 'max': 7, 'default': 5},
+        'general': {'min': 3, 'max': 6, 'default': 5},
     }
 
     # Palabras clave que refuerzan cada tipo
@@ -219,7 +219,7 @@ class QueryAnalyzer:
                       question_lower, re.IGNORECASE):
             detail_level = 'comprehensive'
             summary_cfg = self.FRAGMENTS_CONFIG['summary']
-            num_fragments = summary_cfg['max']  # 15
+            num_fragments = summary_cfg['max']  # 10
             importance_weight = 0.40
 
         ret = {
