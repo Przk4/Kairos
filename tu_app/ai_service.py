@@ -65,7 +65,8 @@ class DeepSeekAIService:
         question: str,
         context: List[dict],
         user: Optional[object] = None,
-        max_tokens: int = 1000
+        max_tokens: int = 1000,
+        question_metadata: Optional[dict] = None,
     ) -> dict:
         """
         Responde una pregunta basándose en contexto RAG.
@@ -78,7 +79,8 @@ class DeepSeekAIService:
             result = self.provider.answer_question(
                 question=question,
                 context=context,
-                max_tokens=max_tokens
+                max_tokens=max_tokens,
+                question_metadata=question_metadata,
             )
             
             # Log a debug service

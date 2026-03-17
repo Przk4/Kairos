@@ -13,6 +13,44 @@ from abc import ABC, abstractmethod
 
 logger = logging.getLogger(__name__)
 
+
+def build_user_prompt(
+    question: str,
+    context_text: str,
+    question_metadata: Optional[Dict[str, Any]],
+) -> str:
+    metadata = question_metadata or {}
+    original_question = (metadata.get('original_question') or question or '').strip()
+    interpreted_question = (metadata.get('interpreted_question') or question or '').strip()
+    analysis_question = (metadata.get('analysis_question') or question or '').strip()
+    correction_applied = bool(metadata.get('correction_applied')) and interpreted_question != original_question
+
+    prompt_parts = [f"Contexto del curso:\n{context_text}\n"]
+    if correction_applied:
+        prompt_parts.append(
+            "Pregunta original del estudiante:\n"
+            f"{original_question}\n\n"
+            "Pregunta interpretada para análisis y respuesta "
+            "(con ortografía/redacción corregidas fuera de comillas literales):\n"
+            f"{interpreted_question}\n"
+        )
+        prompt_parts.append(
+            "Si es útil para la claridad, puedes indicar brevemente que interpretaste la "
+            "pregunta usando la versión corregida. No alteres texto entre comillas: "
+            "trátalo como literal.\n"
+        )
+    else:
+        prompt_parts.append(f"Pregunta del estudiante:\n{interpreted_question or analysis_question}\n")
+
+    if analysis_question and analysis_question != interpreted_question:
+        prompt_parts.append(
+            "Información adicional usada para responder (por ejemplo OCR de imagen adjunta):\n"
+            f"{analysis_question}\n"
+        )
+
+    prompt_parts.append("\nPor favor, responde basándote en el contexto proporcionado.")
+    return "\n".join(prompt_parts)
+
 # ============================================================================
 # INTERFAZ BASE
 # ============================================================================
@@ -25,7 +63,8 @@ class AIProvider(ABC):
         self,
         question: str,
         context: List[dict],
-        max_tokens: int = 8000
+        max_tokens: int = 8000,
+        question_metadata: Optional[Dict[str, Any]] = None,
     ) -> dict:
         """
         Responde una pregunta basándose en contexto RAG.
@@ -83,10 +122,12 @@ FORMATO:
         self,
         question: str,
         context: List[dict],
-        max_tokens: int = 8000
+        max_tokens: int = 8000,
+        question_metadata: Optional[Dict[str, Any]] = None,
     ) -> dict:
         try:
             context_text = self._format_context(context)
+            user_prompt = build_user_prompt(question, context_text, question_metadata)
             
             messages = [
                 {
@@ -95,13 +136,7 @@ FORMATO:
                 },
                 {
                     "role": "user",
-                    "content": f"""Contexto del curso:
-{context_text}
-
-Pregunta del estudiante:
-{question}
-
-Por favor, responde basándote en el contexto proporcionado."""
+                    "content": user_prompt
                 }
             ]
             
@@ -136,7 +171,7 @@ Por favor, responde basándote en el contexto proporcionado."""
                 'model': self.model,
                 'context_used': len(context),
             }
-    
+
     def _format_context(self, context: List[dict]) -> str:
         """Formatea el contexto para enviar a DeepSeek"""
         if not context:
@@ -276,25 +311,21 @@ class OllamaProvider(AIProvider):
         self,
         question: str,
         context: List[dict],
-        max_tokens: int = 1200
+        max_tokens: int = 1200,
+        question_metadata: Optional[Dict[str, Any]] = None,
     ) -> dict:
         try:
             import requests
 
             context_text = self._format_context(context)
+            user_prompt = build_user_prompt(question, context_text, question_metadata)
             payload = {
                 "model": self.model,
                 "messages": [
                     {"role": "system", "content": self.SYSTEM_PROMPT},
                     {
                         "role": "user",
-                        "content": f"""Contexto del curso:
-{context_text}
-
-Pregunta del estudiante:
-{question}
-
-Por favor, responde basándote en el contexto proporcionado."""
+                        "content": user_prompt
                     },
                 ],
                 "max_tokens": max_tokens,
@@ -364,7 +395,8 @@ class MockAIProvider(AIProvider):
         self,
         question: str,
         context: List[dict],
-        max_tokens: int = 1000
+        max_tokens: int = 500,
+        question_metadata: Optional[Dict[str, Any]] = None,
     ) -> dict:
         start_time = time.time()
         
@@ -426,7 +458,7 @@ Basándome en el material disponible: {self._extract_summary(context)}
 # ============================================================================
 
 # 👇 CAMBIAR AQUÍ O POR ENV VAR KAIROS_AI_PROVIDER 👇
-ACTIVE_PROVIDER = os.getenv("KAIROS_AI_PROVIDER", "ollama").strip().lower()
+ACTIVE_PROVIDER = os.getenv("KAIROS_AI_PROVIDER", "deepseek").strip().lower()
 
 # Explicación:
 # "mock" = Responde sin API (perfect para testing hoy)

@@ -28,7 +28,9 @@ from .canvas_auth import (
 from .rag_service import get_rag_service
 from .ai_service import get_ai_service
 from .query_analyzer import get_query_analyzer
+from .question_preprocessor import get_question_preprocessor
 from .debug_state import capture_prompt_flow, push_log
+from .ai_service_config import build_user_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -576,6 +578,8 @@ def chat_api(request):
             finally:
                 timings['ocr_s'] = round(time.time() - ocr_start, 3)
 
+        original_question = question
+
         # Combine question with OCR text
         if image_ocr_text:
             if question:
@@ -612,6 +616,24 @@ def chat_api(request):
         except Exception:
             cleaned_question = question
 
+        question_preprocessor = get_question_preprocessor()
+        question_info = question_preprocessor.preprocess(original_question or cleaned_question)
+        interpreted_user_question = question_info.get('interpreted_question') or cleaned_question
+
+        if image_ocr_text:
+            if interpreted_user_question:
+                analysis_question = f"{interpreted_user_question}\n\n[Contenido de la imagen adjunta]:\n{image_ocr_text}"
+            else:
+                analysis_question = f"Analiza la siguiente imagen:\n\n{image_ocr_text}"
+        else:
+            analysis_question = interpreted_user_question or cleaned_question
+
+        ai_question_metadata = {
+            **question_info,
+            'interpreted_question': interpreted_user_question,
+            'analysis_question': analysis_question,
+        }
+
         student_message = ChatMessage.objects.create(
             user=request.user,
             course=course,
@@ -627,7 +649,7 @@ def chat_api(request):
             # NUEVO: Analizar pregunta para optimizar búsqueda
             analysis_start = time.time()
             query_analyzer = get_query_analyzer(rag_service.embedding_model)
-            query_analysis = query_analyzer.analyze(question)
+            query_analysis = query_analyzer.analyze(interpreted_user_question or analysis_question)
             timings['analysis_s'] = round(time.time() - analysis_start, 3)
             
             # Usar número de fragmentos dinámico basado en análisis
@@ -638,7 +660,7 @@ def chat_api(request):
             search_start = time.time()
             if module:
                 context = rag_service.search_context(
-                    question, module.id, course.id,
+                    analysis_question, module.id, course.id,
                     top_k=optimal_fragments,
                     query_type=query_type,
                         search_terms=query_analysis.get('search_terms'),
@@ -651,7 +673,7 @@ def chat_api(request):
                 context = []
                 for mod in course.modules.all():
                     mod_context = rag_service.search_context(
-                        question, mod.id, course.id,
+                        analysis_question, mod.id, course.id,
                         top_k=optimal_fragments,
                         query_type=query_type,
                         search_terms=query_analysis.get('search_terms'),
@@ -698,9 +720,10 @@ def chat_api(request):
             start_time = time.time()
             
             ai_response = ai_service.answer_question(
-                question=question,
+                question=analysis_question,
                 context=context,
-                user=request.user
+                user=request.user,
+                question_metadata=ai_question_metadata,
             )
             
             processing_time = time.time() - start_time
@@ -714,9 +737,10 @@ def chat_api(request):
             try:
                 from .ai_service_config import DeepSeekProvider
                 _sys_prompt = DeepSeekProvider.SYSTEM_PROMPT
-                _user_prompt = f"Contexto del curso:\n{context_text}\n\nPregunta del estudiante:\n{question}\n\nPor favor, responde basándote en el contexto proporcionado."
+                _user_prompt = build_user_prompt(analysis_question, context_text, ai_question_metadata)
                 capture_prompt_flow({
-                    'question': question,
+                    'question': analysis_question,
+                    'question_metadata': ai_question_metadata,
                     'query_analysis': query_analysis,
                     'query_type': query_type,
                     'optimal_fragments': optimal_fragments,

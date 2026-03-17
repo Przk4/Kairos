@@ -1,19 +1,9 @@
 # tu_app/query_analyzer.py
-"""
-Analizador ligero de preguntas para optimizar RAG.
+"""Analizador ligero de preguntas para optimizar RAG con keywords y reglas."""
 
-Versión optimizada: usa solo Ollama local (qwen2.5:1.5b) para extraer
-términos clave y generar sinónimos/equivalentes para mejorar la búsqueda.
-Sin embeddings en tiempo de query — solo keyword matching rápido.
-
-Fallback: extracción de términos por regex si Ollama no está disponible.
-"""
-
-import json
-import os
 import re
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +12,7 @@ class QueryAnalyzer:
     """
     Analiza preguntas de forma ligera:
     - Tipo de pregunta detectado por keywords (sin embeddings)
-    - Términos clave extraídos + sinónimos generados por Ollama local
+    - Términos clave extraídos por regex y frases literales entre comillas
     - Número óptimo de fragmentos a recuperar
     - Nivel de detalle requerido
     """
@@ -89,14 +79,6 @@ class QueryAnalyzer:
         'todo': ['all', 'everything', 'overview'],
     }
 
-    def __init__(self):
-        self._ai_client = None
-        self._ai_available = None
-        self._ai_terms_enabled = os.getenv('KAIROS_ANALYZER_AI_TERMS', '0').strip().lower() in {'1', 'true', 'yes', 'on'}
-        self._ollama_model = os.getenv('OLLAMA_ANALYZER_MODEL', 'qwen2.5:1.5b')
-        self._connect_timeout = float(os.getenv('OLLAMA_CONNECT_TIMEOUT', '2.0'))
-        self._request_timeout = float(os.getenv('OLLAMA_ANALYZER_TIMEOUT', '2.5'))
-
     # ------------------------------------------------------------------
     # Keyword-only classification (no embeddings, no AI call)
     # ------------------------------------------------------------------
@@ -115,97 +97,6 @@ class QueryAnalyzer:
             return best_type, confidence
 
         return 'general', 0.3
-
-    # ------------------------------------------------------------------
-    # Ollama-only AI for term extraction + synonym generation
-    # ------------------------------------------------------------------
-
-    def _get_ollama_client(self):
-        """Lazy-init: connect to Ollama only (local, free, fast)."""
-        if self._ai_available is False:
-            return None
-        if self._ai_client is not None:
-            return self._ai_client
-        try:
-            ollama_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
-            import urllib.request
-            req = urllib.request.Request(f"{ollama_url}/api/tags", method='GET')
-            with urllib.request.urlopen(req, timeout=self._connect_timeout) as resp:
-                if resp.status == 200:
-                    import openai as _openai
-                    self._ai_client = _openai.OpenAI(
-                        api_key='ollama',
-                        base_url=f"{ollama_url}/v1",
-                        timeout=self._request_timeout,
-                    )
-                    self._ai_available = True
-                    logger.info("QueryAnalyzer: using Ollama (local, lightweight)")
-                    return self._ai_client
-        except Exception:
-            pass
-
-        self._ai_available = False
-        logger.info("QueryAnalyzer: Ollama not available, using keyword fallback")
-        return None
-
-    def _extract_terms_ai(self, question: str) -> Optional[List[str]]:
-        """
-        Use Ollama local to extract key terms AND generate
-        equivalent/synonym terms for better keyword matching.
-        Returns expanded list of search terms, or None on failure.
-        """
-        client = self._get_ollama_client()
-        if not client:
-            return None
-        try:
-            prompt = (
-                'De la siguiente pregunta extrae los conceptos clave como JSON array.\n'
-                'Máximo 6 términos. Solo sustantivos/conceptos clave, sin stopwords.\n'
-                'Responde SOLO el array JSON, sin texto adicional.\n'
-                f'Pregunta: {question}\n'
-                'JSON:'
-            )
-
-            import threading
-
-            result_box: list = [None]
-
-            def _call():
-                try:
-                    resp = client.chat.completions.create(
-                        model=self._ollama_model,
-                        messages=[{'role': 'user', 'content': prompt}],
-                        max_tokens=40,
-                        temperature=0.1,
-                    )
-                    result_box[0] = resp.choices[0].message.content.strip()
-                except Exception:
-                    pass
-
-            t = threading.Thread(target=_call, daemon=True)
-            t.start()
-            t.join(timeout=self._request_timeout)
-            if t.is_alive():
-                logger.warning("QueryAnalyzer AI term extraction timed out")
-                return None
-            text = result_box[0]
-            if text is None:
-                return None
-
-            # Strip markdown fences
-            if text.startswith('```'):
-                text = re.sub(r'^```(?:json)?\s*', '', text)
-                text = re.sub(r'\s*```$', '', text)
-
-            terms = json.loads(text)
-            if isinstance(terms, list):
-                terms = [str(t).strip() for t in terms if t and str(t).strip()][:10]
-                logger.info(f"QueryAnalyzer AI terms: {terms}")
-                return terms
-
-        except Exception as e:
-            logger.warning(f"QueryAnalyzer AI term extraction failed: {e}")
-        return None
 
     # ------------------------------------------------------------------
     # Helpers
@@ -252,6 +143,14 @@ class QueryAnalyzer:
                 unique.append(w)
         return unique
 
+    def _extract_quoted_terms(self, question: str) -> List[str]:
+        literals = []
+        for match in re.finditer(r'"([^"\n]+)"|“([^”\n]+)”', question):
+            literal = (match.group(1) or match.group(2) or '').strip()
+            if literal and literal.lower() not in {item.lower() for item in literals}:
+                literals.append(literal)
+        return literals
+
     def _calculate_optimal_fragments(self, query_type: str, detail_level: str,
                                      question_length: int) -> int:
         config = self.FRAGMENTS_CONFIG.get(query_type, self.FRAGMENTS_CONFIG['general'])
@@ -276,9 +175,10 @@ class QueryAnalyzer:
 
         Flow ligero:
         1. Clasificar tipo por keywords (regex, instantáneo)
-        2. Extraer términos + sinónimos con Ollama local (rápido, ~200ms)
-        3. Si Ollama no disponible, extraer por regex + expandir bilingüe
-        4. Calcular fragmentos óptimos
+        2. Extraer términos por regex
+        3. Preservar frases literales entre comillas
+        4. Expandir términos bilingües
+        5. Calcular fragmentos óptimos
         """
         if not question or not question.strip():
             return {
@@ -297,15 +197,11 @@ class QueryAnalyzer:
         query_type, confidence = self._classify_by_keywords(question)
         detail_level = self._detect_detail_level(question)
 
-        # --- 2. Extract terms: try Ollama first, fallback to regex ---
-        ai_terms = self._extract_terms_ai(question) if self._ai_terms_enabled else None
-        if ai_terms:
-            search_terms = ai_terms
-            method = 'ollama'
-        else:
-            search_terms = self._extract_search_terms(question)
-            search_terms = self._expand_bilingual(search_terms)
-            method = 'keywords'
+        # --- 2. Extract terms using keywords + quoted literals ---
+        quoted_terms = self._extract_quoted_terms(question)
+        search_terms = quoted_terms + self._extract_search_terms(question)
+        search_terms = self._expand_bilingual(search_terms)
+        method = 'keywords'
 
         reasoning = (
             f"Tipo '{query_type}' (conf: {confidence:.2f}). "
