@@ -18,6 +18,7 @@ from tu_app.models import Course, Module
 from tu_app.ocr_service import get_ocr_service
 from tu_app.rag_service import get_rag_service
 from tu_app.query_analyzer import get_query_analyzer
+from tu_app.question_preprocessor import get_question_preprocessor
 from tu_app.ai_service import get_ai_service
 
 
@@ -45,6 +46,11 @@ def main():
 
     image_bytes = make_test_image_bytes()
 
+    question_preprocessor = get_question_preprocessor()
+    question_info, t_preprocess = timed(lambda: question_preprocessor.preprocess(question))
+    interpreted_question = question_info.get("interpreted_question") or question
+    results["preprocess_s"] = round(t_preprocess, 3)
+
     try:
         ocr, t_ocr = timed(lambda: get_ocr_service().extract_text(image_bytes))
         results["ocr_s"] = round(t_ocr, 3)
@@ -58,7 +64,7 @@ def main():
     rag_service = get_rag_service()
     analyzer = get_query_analyzer(rag_service.embedding_model)
 
-    query_analysis, t_analysis = timed(lambda: analyzer.analyze(question))
+    query_analysis, t_analysis = timed(lambda: analyzer.analyze(interpreted_question))
     results["analysis_s"] = round(t_analysis, 3)
     results["query_type"] = query_analysis.get("query_type")
     results["num_fragments"] = query_analysis.get("num_fragments")
@@ -69,7 +75,7 @@ def main():
     if module and course:
         context, t_search = timed(
             lambda: rag_service.search_context(
-                question,
+                interpreted_question,
                 module.id,
                 course.id,
                 top_k=query_analysis.get("num_fragments", 6),
@@ -85,17 +91,28 @@ def main():
     results["context_count"] = len(context)
 
     ai_service = get_ai_service()
-    ai_response, t_ai = timed(lambda: ai_service.answer_question(question=question, context=context, user=None))
+    ai_response, t_ai = timed(
+        lambda: ai_service.answer_question(
+            question=interpreted_question,
+            context=context,
+            user=None,
+            question_metadata={
+                **question_info,
+                "analysis_question": interpreted_question,
+            },
+        )
+    )
     results["ai_s"] = round(t_ai, 3)
     results["model"] = ai_response.get("model")
     results["tokens_used"] = ai_response.get("tokens_used", 0)
 
-    total_s = results["ocr_s"] + results["analysis_s"] + results["search_s"] + results["ai_s"]
+    total_s = results["preprocess_s"] + results["ocr_s"] + results["analysis_s"] + results["search_s"] + results["ai_s"]
     results["total_pipeline_s"] = round(total_s, 3)
 
     print("=== BENCHMARK CHAT PIPELINE ===")
     for key in [
         "model",
+        "preprocess_s",
         "ocr_s",
         "ocr_chars",
         "analysis_s",

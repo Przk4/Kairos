@@ -528,6 +528,7 @@ def chat_api(request):
         timings = {
             'parse_s': 0.0,
             'ocr_s': 0.0,
+            'preprocess_s': 0.0,
             'analysis_s': 0.0,
             'search_s': 0.0,
             'ai_s': 0.0,
@@ -616,6 +617,7 @@ def chat_api(request):
         except Exception:
             cleaned_question = question
 
+        preprocess_start = time.time()
         question_preprocessor = get_question_preprocessor()
         question_info = question_preprocessor.preprocess(original_question or cleaned_question)
         interpreted_user_question = question_info.get('interpreted_question') or cleaned_question
@@ -633,6 +635,7 @@ def chat_api(request):
             'interpreted_question': interpreted_user_question,
             'analysis_question': analysis_question,
         }
+        timings['preprocess_s'] = round(time.time() - preprocess_start, 3)
 
         student_message = ChatMessage.objects.create(
             user=request.user,
@@ -785,12 +788,13 @@ def chat_api(request):
             timings['total_s'] = round(time.time() - request_start, 3)
             
             logger.info(
-                "Chat processed for user %s - %s tokens, total=%ss (parse=%ss, ocr=%ss, analysis=%ss, search=%ss, ai=%ss, db=%ss)",
+                "Chat processed for user %s - %s tokens, total=%ss (parse=%ss, ocr=%ss, preprocess=%ss, analysis=%ss, search=%ss, ai=%ss, db=%ss)",
                 request.user.username,
                 tokens,
                 timings['total_s'],
                 timings['parse_s'],
                 timings['ocr_s'],
+                timings['preprocess_s'],
                 timings['analysis_s'],
                 timings['search_s'],
                 timings['ai_s'],
